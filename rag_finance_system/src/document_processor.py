@@ -209,10 +209,10 @@ class DocumentProcessor:
                 prev_empty = False
         return "\n".join(cleaned_lines).strip()
 
-    def split_into_chunks(self, doc_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def split_into_chunks(self, doc_info: Dict[str, Any], doc_type: str = "law") -> List[Dict[str, Any]]:
         """
         将文档全文分段，返回带元数据的chunk列表
-        每个chunk包含：text, source, chunk_id, article_num(条文号，如有)
+        每个chunk包含：text, source, chunk_id, article_num(条文号，如有), doc_type
         """
         full_text = doc_info["full_text"]
         chunks_text = self.splitter.split_text(full_text)
@@ -229,14 +229,15 @@ class DocumentProcessor:
                 "file_path": doc_info["file_path"],
                 "article_num": article_num,
                 "chunk_index": idx,
+                "doc_type": doc_type,
             })
 
         logger.info(f"文档 [{doc_info['title']}] 分段完成，共 {len(chunks)} 个chunk")
         return chunks
 
-    def process_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
+    def process_pdf(self, pdf_path: str, doc_type: str = "law") -> List[Dict[str, Any]]:
         doc_info = self.extract_text_from_pdf(pdf_path)
-        return self.split_into_chunks(doc_info)
+        return self.split_into_chunks(doc_info, doc_type=doc_type)
 
     def extract_text_from_txt(self, txt_path: str) -> Dict[str, Any]:
         path = Path(txt_path)
@@ -254,16 +255,16 @@ class DocumentProcessor:
             "full_text": text,
         }
 
-    def process_txt(self, txt_path: str) -> List[Dict[str, Any]]:
+    def process_txt(self, txt_path: str, doc_type: str = "law") -> List[Dict[str, Any]]:
         doc_info = self.extract_text_from_txt(txt_path)
-        return self.split_into_chunks(doc_info)
+        return self.split_into_chunks(doc_info, doc_type=doc_type)
 
-    def process_file(self, file_path: str) -> List[Dict[str, Any]]:
+    def process_file(self, file_path: str, doc_type: str = "law") -> List[Dict[str, Any]]:
         suffix = Path(file_path).suffix.lower()
         if suffix == ".pdf":
-            return self.process_pdf(file_path)
+            return self.process_pdf(file_path, doc_type=doc_type)
         if suffix == ".txt":
-            return self.process_txt(file_path)
+            return self.process_txt(txt_path=file_path, doc_type=doc_type)
         raise ValueError(f"不支持的文件类型: {suffix}，仅支持PDF和TXT")
 
     def process_directory(self, dir_path: str) -> List[Dict[str, Any]]:
@@ -278,3 +279,5 @@ class DocumentProcessor:
             except Exception as e:
                 logger.error(f"处理 {file_path.name} 失败: {e}")
         return all_chunks
+      
+    

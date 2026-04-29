@@ -37,7 +37,9 @@ def build_prompt(query: str, chunks: List[Dict[str, Any]]) -> List[dict]:
         for i, chunk in enumerate(chunks, 1):
             source = chunk.get("source", "未知文件")
             article = chunk.get("article_num", "")
-            source_tag = f"【{source}{'  ' + article if article else ''}】"
+            doc_type = chunk.get("doc_type", "law")
+            prefix = "案例" if doc_type == "case" else "法规"
+            source_tag = f"【{prefix} {source}{'  ' + article if article else ''}】"
             context_parts.append(f"{i}. {source_tag}\n{chunk['text']}")
         context = "\n\n".join(context_parts)
 
@@ -61,9 +63,11 @@ class RAGChain:
     整合：Retriever（检索） + LLM（生成）
     """
 
-    def __init__(self, retriever, llm):
+    def __init__(self, retriever, llm,case_retriever=None):
         self.retriever = retriever
         self.llm = llm
+        self.case_retriever = case_retriever
+
 
     def query(
         self,
@@ -71,6 +75,7 @@ class RAGChain:
         top_k: Optional[int] = None,
         use_reranker: bool = True,
         source_filter: Optional[str] = None,
+        doc_type_filter: Optional[str] = None,
         max_new_tokens: int = 1024,
     ) -> Dict[str, Any]:
         """
@@ -91,8 +96,8 @@ class RAGChain:
             top_k=top_k,
             use_reranker=use_reranker,
             source_filter=source_filter,
+            doc_type_filter=doc_type_filter,
         )
-
         # 2. 构建Prompt
         messages = build_prompt(question, chunks)
 

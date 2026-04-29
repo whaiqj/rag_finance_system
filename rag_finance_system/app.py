@@ -65,6 +65,13 @@ with st.sidebar:
     use_reranker = st.toggle("启用Reranker精排", value=True,
                              help="提升检索精度，需额外~1.1GB显存")
 
+    mode = st.selectbox(
+        "检索模式",
+        ["法条+案例", "仅法条", "仅案例"],
+        index=0,
+        help="选择本次问答检索范围：全部/仅法规/仅案例",
+    )
+
     st.divider()
     st.subheader("文档管理")
 
@@ -73,6 +80,38 @@ with st.sidebar:
         type=["pdf", "txt"],
         help="支持中文PDF或纯文本TXT，最大200MB"
     )
+    
+    case_file = st.file_uploader(
+        "上传案例文件",
+        type=["pdf","txt"],
+        help="支持中文PDF或纯文本TXT，最大200MB"
+    )
+
+    if case_file:
+        if st.button("解析案例并建立索引", type="secondary", key="case_btn"):
+
+            save_path = Path("data/raw/case") / case_file.name
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(save_path, "wb") as f:
+                f.write(case_file.getvalue())
+
+            with st.spinner(f"正在解析案例 {case_file.name}..."):
+                comps = load_components(use_reranker, use_api)
+
+                chunks = comps["processor"].process_file(str(save_path), doc_type="case")
+
+                # 👇 核心区别就在这
+                for c in chunks:
+                    c["source"] = "case"
+
+                texts = [c["text"] for c in chunks]
+
+                embeddings = comps["embedder"].encode_documents(texts)
+
+                comps["vector_store"].insert(chunks, embeddings)
+
+                st.success(f"✅ 案例入库完成：{len(chunks)} 条")
 
     if uploaded_file:
         if st.button("解析并建立索引", type="primary"):
@@ -85,7 +124,7 @@ with st.sidebar:
             # 建立索引
             with st.spinner(f"正在解析 {uploaded_file.name}..."):
                 comps = load_components(use_reranker, use_api)
-                chunks = comps["processor"].process_file(str(save_path))
+                chunks = comps["processor"].process_file(str(save_path), doc_type="law")
                 texts = [c["text"] for c in chunks]
 
                 progress_bar = st.progress(0, text="生成向量...")
@@ -152,7 +191,12 @@ if question := st.chat_input("请输入您的金融法规问题..."):
         with st.spinner("检索相关条文并生成答案..."):
             try:
                 comps = load_components(use_reranker, use_api)
-                result = comps["rag"].query(question)
+                doc_type_filter = None
+                if mode == "仅法条":
+                    doc_type_filter = "law"
+                elif mode == "仅案例":
+                    doc_type_filter = "case"
+                result = comps["rag"].query(question, doc_type_filter=doc_type_filter)
 
                 answer = result["answer"]
                 sources = result["sources"]

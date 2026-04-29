@@ -48,6 +48,7 @@ class VectorStore:
                     "article_num": chunk.get("article_num", ""),
                     "file_path": chunk.get("file_path", ""),
                     "chunk_index": chunk.get("chunk_index", 0),
+                    "doc_type": chunk.get("doc_type", "law"),
                 })
 
             self.collection.add(
@@ -68,11 +69,16 @@ class VectorStore:
         query_vector: List[float],
         top_k: int = 10,
         source_filter: Optional[str] = None,
+        doc_type_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
 
-        where = None
+        where = {}
         if source_filter:
-            where = {"source": source_filter}
+            where["source"] = source_filter
+        if doc_type_filter:
+            where["doc_type"] = doc_type_filter
+        if not where:
+            where = None
 
         results = self.collection.query(
             query_embeddings=[query_vector],

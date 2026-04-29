@@ -2,6 +2,7 @@
 retriever.py
 检索模块：向量检索 + Reranker精排
 Phase 1实现纯向量检索，Phase 2扩展混合检索
+通用检索器
 """
 
 import os
@@ -45,6 +46,7 @@ class Retriever:
         top_k: Optional[int] = None,
         use_reranker: bool = True,
         source_filter: Optional[str] = None,
+        doc_type_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         端到端检索：query → 相关chunks
@@ -53,6 +55,7 @@ class Retriever:
             top_k: 向量检索数量（覆盖默认值）
             use_reranker: 是否启用Reranker精排
             source_filter: 按文档来源过滤
+            doc_type_filter: 按文档类型过滤（law/case）
         Returns:
             排序后的chunk列表，每条包含text、source、score等
         """
@@ -67,6 +70,7 @@ class Retriever:
             query_vector=query_vector,
             top_k=k,
             source_filter=source_filter,
+            doc_type_filter=doc_type_filter,
         )
         logger.info(f"向量检索召回 {len(candidates)} 条")
 
