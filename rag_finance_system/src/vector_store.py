@@ -1,33 +1,217 @@
-import chromadb
-from loguru import logger
-from typing import List, Dict, Any, Optional
+import os
 import uuid
+from typing import List, Dict, Any, Optional
 
-COLLECTION_NAME = "finance_regulations"
+from dotenv import load_dotenv
+from loguru import logger
+from pymilvus import (
+    CollectionSchema,
+    DataType,
+    FieldSchema,
+    MilvusClient,
+)
+from pymilvus.milvus_client.index import IndexParams
+
+load_dotenv()
+
+COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "finance_regulations")
+DEFAULT_TEXT_MAX_LENGTH = 4096
+
 
 class VectorStore:
     def __init__(self):
-        logger.info("初始化 Chroma 向量库")
+        self.collection_name = COLLECTION_NAME
+        uri = os.getenv("MILVUS_URI", "")
+        host = os.getenv("MILVUS_HOST", "127.0.0.1")
+        port = os.getenv("MILVUS_PORT", "19530")
+        user = os.getenv("MILVUS_USER", "")
+        password = os.getenv("MILVUS_PASSWORD", "")
+        db_name = os.getenv("MILVUS_DB_NAME", "")
+        self.embed_dim = self._read_embed_dim()
+        self._index_type: Optional[str] = None
 
-        self.client = chromadb.Client(
-            settings=chromadb.config.Settings(
-                persist_directory="./db/chroma"
+        if not uri:
+            uri = f"http://{host}:{port}"
+
+        self.client = self._connect(uri, user, password, db_name)
+        self._ensure_loaded()
+
+    def _read_embed_dim(self) -> Optional[int]:
+        raw = os.getenv("MILVUS_EMBED_DIM", "").strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            logger.warning(f"MILVUS_EMBED_DIM 不是有效整数: {raw}，将改为首次写入时自动推断")
+            return None
+
+    def _connect(self, uri: str, user: str, password: str, db_name: str) -> MilvusClient:
+        logger.info("初始化 Milvus 向量库")
+        kwargs = {"uri": uri}
+        if user:
+            kwargs["user"] = user
+        if password:
+            kwargs["password"] = password
+        if db_name:
+            kwargs["db_name"] = db_name
+
+        try:
+            client = MilvusClient(**kwargs)
+            return client
+        except Exception as e:
+            raise RuntimeError(
+                "Milvus 连接失败，请检查 MILVUS_URI 或 MILVUS_HOST/MILVUS_PORT 配置。"
+            ) from e
+
+    def _ensure_loaded(self):
+        if self.client.has_collection(self.collection_name):
+            self.client.load_collection(self.collection_name)
+            self._index_type = self._detect_index_type()
+            logger.info(f"已加载 Milvus collection: {self.collection_name}")
+        else:
+            logger.info(f"Milvus collection 不存在，将在首次写入时创建: {self.collection_name}")
+
+    def _detect_index_type(self) -> Optional[str]:
+        try:
+            indexes = self.client.list_indexes(self.collection_name)
+            if indexes:
+                idx_info = self.client.describe_index(self.collection_name, indexes[0])
+                idx_type = idx_info.get("index_type", "")
+                if idx_type:
+                    return idx_type
+        except Exception:
+            pass
+
+        try:
+            desc = self.client.describe_collection(self.collection_name)
+            for idx in desc.get("indexes", []):
+                idx_type = idx.get("index_type", "")
+                if idx_type:
+                    return idx_type
+            for field in desc.get("fields", []):
+                if field.get("name") == "embedding":
+                    for idx in (field.get("index_params") or []):
+                        idx_type = idx.get("index_type", "")
+                        if idx_type:
+                            return idx_type
+        except Exception:
+            pass
+        return None
+
+    def _ensure_collection(self, dim: int):
+        if self.client.has_collection(self.collection_name):
+            self.client.load_collection(self.collection_name)
+            self._index_type = self._detect_index_type()
+            return
+
+        self.embed_dim = self.embed_dim or dim
+        if self.embed_dim != dim:
+            raise ValueError(f"向量维度不匹配：collection={self.embed_dim}, 当前={dim}")
+
+        fields = [
+            FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, auto_id=False, max_length=64),
+            FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=self.embed_dim),
+            FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=DEFAULT_TEXT_MAX_LENGTH),
+            FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=512),
+            FieldSchema(name="chunk_id", dtype=DataType.VARCHAR, max_length=512),
+            FieldSchema(name="article_num", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="file_path", dtype=DataType.VARCHAR, max_length=2048),
+            FieldSchema(name="chunk_index", dtype=DataType.INT64),
+            FieldSchema(name="doc_type", dtype=DataType.VARCHAR, max_length=64),
+            FieldSchema(name="law_name", dtype=DataType.VARCHAR, max_length=512),
+            FieldSchema(name="authority", dtype=DataType.VARCHAR, max_length=512),
+        ]
+        schema = CollectionSchema(fields=fields, description="金融法规向量库")
+
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            schema=schema,
+        )
+        self._ensure_index()
+        self.client.load_collection(self.collection_name)
+        logger.info(f"已创建 Milvus collection: {self.collection_name} (dim={self.embed_dim})")
+
+    def _ensure_index(self):
+        try:
+            idxp = IndexParams()
+            idxp.add_index(
+                field_name="embedding",
+                index_type="AUTOINDEX",
+                metric_type="COSINE",
             )
-        )
+            self.client.create_index(
+                collection_name=self.collection_name,
+                index_params=idxp,
+            )
+            self._index_type = "AUTOINDEX"
+            logger.info("Milvus 向量索引已创建: AUTOINDEX/COSINE")
+        except Exception as autoindex_error:
+            logger.warning(f"AUTOINDEX 创建失败，回退 HNSW: {autoindex_error}")
+            idxp = IndexParams()
+            idxp.add_index(
+                field_name="embedding",
+                index_type="HNSW",
+                metric_type="COSINE",
+                params={"M": 16, "efConstruction": 200},
+            )
+            self.client.create_index(
+                collection_name=self.collection_name,
+                index_params=idxp,
+            )
+            self._index_type = "HNSW"
+            logger.info("Milvus 向量索引已创建: HNSW/COSINE")
 
-        self.collection = self.client.get_or_create_collection(
-            name=COLLECTION_NAME
-        )
+    def _get_search_params(self) -> dict:
+        if self._index_type and self._index_type.upper() == "HNSW":
+            return {"metric_type": "COSINE", "params": {"ef": 64}}
+        return {"metric_type": "COSINE", "params": {}}
 
-    
+    @staticmethod
+    def _clean_text(value: Any, limit: int) -> str:
+        return str(value or "")[:limit]
+
+    @staticmethod
+    def _escape_expr_value(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    def _build_expr(
+        self,
+        source_filter: Optional[str] = None,
+        doc_type_filter: Optional[str] = None,
+        law_name_filter: Optional[str] = None,
+        authority_filter: Optional[str] = None,
+    ) -> Optional[str]:
+        clauses = []
+        for key, value in {
+            "source": source_filter,
+            "doc_type": doc_type_filter,
+            "law_name": law_name_filter,
+            "authority": authority_filter,
+        }.items():
+            if value:
+                clauses.append(f'{key} == "{self._escape_expr_value(str(value))}"')
+        return " and ".join(clauses) if clauses else ""
+
+    @staticmethod
+    def _normalize_score(raw_score: float) -> float:
+        if 0.0 <= raw_score <= 1.0:
+            return round(raw_score, 4)
+        if -1.0 <= raw_score <= 1.0:
+            return round((raw_score + 1.0) / 2.0, 4)
+        return round(max(0.0, min(1.0, 1.0 - raw_score / 2.0)), 4)
+
     def insert(
         self,
         chunks: List[Dict[str, Any]],
         embeddings: List[List[float]],
-        batch_size: int = 4000,   # 👈 新增参数
+        batch_size: int = 4000,
     ) -> int:
-
         assert len(chunks) == len(embeddings), "chunks与embeddings数量不匹配"
+        if not chunks:
+            return 0
+
+        self._ensure_collection(len(embeddings[0]))
 
         total = len(chunks)
         inserted = 0
@@ -36,35 +220,29 @@ class VectorStore:
             batch_chunks = chunks[i:i + batch_size]
             batch_embeddings = embeddings[i:i + batch_size]
 
-            ids = [str(uuid.uuid4()) for _ in batch_chunks]
-
-            documents = [chunk["text"][:4096] for chunk in batch_chunks]
-
-            metadatas = []
-            for chunk in batch_chunks:
-                metadatas.append({
-                    "source": chunk.get("source", ""),
-                    "chunk_id": chunk.get("chunk_id", ""),
-                    "article_num": chunk.get("article_num", ""),
-                    "file_path": chunk.get("file_path", ""),
-                    "chunk_index": chunk.get("chunk_index", 0),
-                    "doc_type": chunk.get("doc_type", "law"),
-                    "law_name": chunk.get("law_name", ""),
-                    "authority": chunk.get("authority", ""),
+            data = []
+            for chunk, emb in zip(batch_chunks, batch_embeddings):
+                data.append({
+                    "id": str(uuid.uuid4()),
+                    "embedding": emb,
+                    "text": self._clean_text(chunk.get("text", ""), DEFAULT_TEXT_MAX_LENGTH),
+                    "source": self._clean_text(chunk.get("source", ""), 512),
+                    "chunk_id": self._clean_text(chunk.get("chunk_id", ""), 512),
+                    "article_num": self._clean_text(chunk.get("article_num", ""), 64),
+                    "file_path": self._clean_text(chunk.get("file_path", ""), 2048),
+                    "chunk_index": int(chunk.get("chunk_index", 0)),
+                    "doc_type": self._clean_text(chunk.get("doc_type", "law"), 64),
+                    "law_name": self._clean_text(chunk.get("law_name", ""), 512),
+                    "authority": self._clean_text(chunk.get("authority", ""), 512),
                 })
 
-            self.collection.add(
-                ids=ids,
-                documents=documents,
-                embeddings=batch_embeddings,
-                metadatas=metadatas
-            )
-
+            self.client.insert(collection_name=self.collection_name, data=data)
             inserted += len(batch_chunks)
             logger.info(f"已插入 {inserted}/{total}")
 
+        self.client.flush(self.collection_name)
+        self.client.load_collection(self.collection_name)
         return inserted
-       
 
     def search(
         self,
@@ -75,41 +253,71 @@ class VectorStore:
         law_name_filter: Optional[str] = None,
         authority_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        if not self.client.has_collection(self.collection_name):
+            return []
 
-        where = {}
-        if source_filter:
-            where["source"] = source_filter
-        if doc_type_filter:
-            where["doc_type"] = doc_type_filter
-        if law_name_filter:
-            where["law_name"] = law_name_filter
-        if authority_filter:
-            where["authority"] = authority_filter
-        if not where:
-            where = None
+        self.client.load_collection(self.collection_name)
 
-        results = self.collection.query(
-            query_embeddings=[query_vector],
-            n_results=top_k,
-            where=where
+        expr = self._build_expr(
+            source_filter=source_filter,
+            doc_type_filter=doc_type_filter,
+            law_name_filter=law_name_filter,
+            authority_filter=authority_filter,
+        )
+
+        search_params = self._get_search_params()
+        output_fields = [
+            "text",
+            "source",
+            "chunk_id",
+            "article_num",
+            "file_path",
+            "chunk_index",
+            "doc_type",
+            "law_name",
+            "authority",
+        ]
+
+        results = self.client.search(
+            collection_name=self.collection_name,
+            data=[query_vector],
+            filter=expr if expr else "",
+            limit=top_k,
+            output_fields=output_fields,
+            search_params=search_params,
+            anns_field="embedding",
         )
 
         hits = []
-        for i in range(len(results["ids"][0])):
-            hits.append({
-                "id": results["ids"][0][i],
-                "score": 1 - results["distances"][0][i] / 4,
-                "text": results["documents"][0][i],
-                **results["metadatas"][0][i],
-            })
+        for result_list in results:
+            for hit in result_list:
+                entity = hit.get("entity", {})
+                hits.append({
+                    "id": str(hit.get("id", "")),
+                    "score": self._normalize_score(float(hit.get("distance", 0.0))),
+                    "text": entity.get("text", ""),
+                    "source": entity.get("source", ""),
+                    "chunk_id": entity.get("chunk_id", ""),
+                    "article_num": entity.get("article_num", ""),
+                    "file_path": entity.get("file_path", ""),
+                    "chunk_index": entity.get("chunk_index", 0),
+                    "doc_type": entity.get("doc_type", "law"),
+                    "law_name": entity.get("law_name", ""),
+                    "authority": entity.get("authority", ""),
+                })
 
         return hits
 
     def get_collection_stats(self) -> Dict[str, Any]:
-        return {
-            "count": self.collection.count()
-        }
+        if not self.client.has_collection(self.collection_name):
+            return {"count": 0, "row_count": 0}
+
+        stats = self.client.get_collection_stats(self.collection_name)
+        count = stats.get("row_count", 0)
+        return {"count": count, "row_count": count}
 
     def drop_collection(self):
-        self.client.delete_collection(COLLECTION_NAME)
-        logger.warning(f"Collection [{COLLECTION_NAME}] 已删除")
+        if self.client.has_collection(self.collection_name):
+            self.client.drop_collection(self.collection_name)
+            self._index_type = None
+            logger.warning(f"Collection [{self.collection_name}] 已删除")

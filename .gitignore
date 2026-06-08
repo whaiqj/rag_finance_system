@@ -17,9 +17,14 @@ Thumbs.db
 # 日志
 *.log
 
-# 模型/数据（如果有）
+# 模型
 models/
-data/
+checkpoints/
 
+# 数据（source data 不在此列）
+data/raw/
+rag_finance_system/data/
+fdata/
+*.docx
 *.bin
 *.pt

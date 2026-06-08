@@ -9,7 +9,7 @@
   │
   ├── 实体检测 (文件名 / 法律名称 / 监管机构自动识别)
   ├── 查询重写 (Qwen2.5-0.5B + LoRA → 回退主 LLM)
-  ├── 多过滤器向量检索 (bge-small-zh-v1.5 + ChromaDB)
+  ├── 多过滤器向量检索 (bge-small-zh-v1.5 + Milvus)
   │     └── 法律名 / 机构 / 来源文件 OR 组合 + doc_type AND 过滤
   ├── Reranker 精排 (bge-reranker-v2-m3, Sigmoid 归一化)
   ├── Prompt 组装 (System + Context + Question)
@@ -41,7 +41,7 @@
 | Embedding | bge-small-zh-v1.5 (512d) |
 | Reranker | bge-reranker-v2-m3 (Cross-Encoder + Sigmoid) |
 | 查询重写 | Qwen2.5-0.5B-Instruct + LoRA |
-| 向量数据库 | ChromaDB (本地持久化) |
+| 向量数据库 | Milvus (本地/自建服务) |
 | LLM | Qwen2.5-7B-Instruct-GPTQ-Int4 / DeepSeek / 通义千问 |
 | 文档解析 | pdfplumber (PDF) + 自研分段器 |
 
@@ -67,7 +67,7 @@ rag_finance_system/
 │       ├── 上海监管局/
 │       ├── 江苏监管局/
 │       └── 浙江监管局/
-├── db/chroma/                    # ChromaDB 向量存储
+├── Milvus 服务                    # 向量存储（本地/自建部署，仓库外部依赖）
 ├── rag_finance_system/
 │   ├── .env                      # 环境配置 (不纳入版本控制)
 │   ├── app.py                    # Streamlit 前端
@@ -75,7 +75,7 @@ rag_finance_system/
 │   │   ├── __init__.py
 │   │   ├── document_processor.py # 文档解析 + 三轨智能分段
 │   │   ├── embedder.py           # Embedding + Reranker (Sigmoid)
-│   │   ├── vector_store.py       # ChromaDB 向量存储 (多维度过滤)
+│   │   ├── vector_store.py       # Milvus 向量存储 (多维度过滤)
 │   │   ├── retriever.py          # 检索器 (多过滤器 OR + 精排 + 可信度)
 │   │   ├── rag_chain.py          # RAG 主链路 (实体检测 → 重写 → 检索 → 生成 → 溯源)
 │   │   ├── rewriter.py           # 查询重写器 (小模型 + LoRA)
@@ -130,6 +130,18 @@ LLM_MODEL_PATH=./models/Qwen2.5-7B-Int4
 # API 密钥（本地模型不可用时自动切换）
 DEEPSEEK_API_KEY=sk-xxx
 DASHSCOPE_API_KEY=xxx
+
+# Milvus 连接配置（本地/自建服务）
+MILVUS_HOST=127.0.0.1
+MILVUS_PORT=19530
+# 或使用 URI
+# MILVUS_URI=http://127.0.0.1:19530
+MILVUS_COLLECTION_NAME=finance_regulations
+MILVUS_EMBED_DIM=512
+# 可选：数据库名 / 认证
+# MILVUS_DB_NAME=default
+# MILVUS_USER=
+# MILVUS_PASSWORD=
 
 # 检索参数
 RETRIEVER_TOP_K=10      # 向量检索召回数量
@@ -207,7 +219,7 @@ python rag_finance_system/tools/train_rewriter.py
 
 ```
 文档上传 → PDF/TXT 解析 → 智能分段（法条/案例/其他三轨）
-  → 元数据提取（法律名、发布机构） → Embedding → ChromaDB 存储
+  → 元数据提取（法律名、发布机构） → Embedding → Milvus 存储
 
 用户提问 → 实体检测（文件名/法律名/机构）
   → 查询重写（小模型 + LoRA → 回退主 LLM）
