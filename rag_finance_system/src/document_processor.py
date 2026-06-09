@@ -421,7 +421,7 @@ class DocumentProcessor:
                 "law_name": law_name,
                 "authority": authority,
                 "effective_date": effective_date,
-                "status": "有效",  # 多版本场景由 resolve_version_status 修正
+                "status": "有效",  # 默认有效，多版本场景由 resolve_version_status 修正
             })
 
         logger.info(
@@ -437,7 +437,7 @@ class DocumentProcessor:
             return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
         return ""
 
-    def _extract_law_name_and_date(self, title: str, doc_type: str) -> tuple:
+    def _extract_law_name_and_date(self, title: str, doc_type: str) -> tuple[str, str]:
         """从 title 同时提取法规名和生效日期。返回 (law_name, effective_date)"""
         if doc_type != "law":
             return title, self._extract_date_from_title(title)
@@ -446,19 +446,25 @@ class DocumentProcessor:
         return (law_name or title, date_str)
 
     @staticmethod
-    def resolve_version_status(all_chunks: list) -> list:
-        """同名法规多版本状态判定: 最新日期 → 有效，其余 → 已修订。"""
+    def resolve_version_status(all_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """同名法规多版本状态判定: 最新日期 → 有效，其余 → 已修订。
+        在全部 chunk 建索引前调用，跨文件比较。
+        """
         from collections import defaultdict
-        groups: dict[str, list] = defaultdict(list)
+
+        groups: dict[str, list[dict]] = defaultdict(list)
         for c in all_chunks:
             groups[c.get("law_name", "")].append(c)
-        for group in groups.values():
-            if not group:
+
+        for law_name, group in groups.items():
+            if not law_name or not group:
                 continue
+            # 按日期降序
             group.sort(key=lambda c: c.get("effective_date", ""), reverse=True)
             latest_date = group[0].get("effective_date", "")
             for c in group:
                 c["status"] = "有效" if c.get("effective_date", "") == latest_date else "已修订"
+
         return all_chunks
 
     def _extract_authority(self, title: str, file_path: str) -> str:

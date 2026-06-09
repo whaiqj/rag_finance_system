@@ -1,7 +1,9 @@
 """
 convert_testfiles.py
 将 data/testfiles/ 下所有 .doc/.docx 通过 LibreOffice headless 转为 UTF-8 .txt。
+优先读取 SOFFICE_PATH，未设置时自动从 PATH 或常见安装位置查找 soffice。
 """
+import os
 import subprocess
 import shutil
 import tempfile
@@ -9,18 +11,34 @@ from pathlib import Path
 
 
 BASE = Path(__file__).resolve().parent.parent.parent / "data" / "testfiles"
-SOFFICE = r"C:\Program Files\LibreOffice\program\soffice.exe"
+SOFFICE_CANDIDATES = [
+    os.getenv("SOFFICE_PATH"),
+    shutil.which("soffice"),
+    shutil.which("libreoffice"),
+    r"C:\Program Files\LibreOffice\program\soffice.exe",
+    r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+]
+
+
+def resolve_soffice() -> str:
+    for candidate in SOFFICE_CANDIDATES:
+        if candidate and Path(candidate).exists():
+            return str(candidate)
+    raise FileNotFoundError(
+        "未找到 soffice，可设置 SOFFICE_PATH 或将 LibreOffice 加入 PATH"
+    )
 
 
 def convert_with_libreoffice(src: Path, dst: Path) -> bool:
     """用 LibreOffice headless 转换单个 .doc/.docx → .txt，输出为 UTF-8。"""
+    soffice = resolve_soffice()
     tmpdir = Path(tempfile.mkdtemp())
     tmp_src = tmpdir / src.name
     shutil.copy2(src, tmp_src)
 
-    result = subprocess.run(
+    subprocess.run(
         [
-            SOFFICE,
+            soffice,
             "--headless",
             "--convert-to", "txt:Text",
             "--outdir", str(tmpdir),

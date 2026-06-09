@@ -102,6 +102,8 @@ class ESIndex:
                     "doc_type": {"type": "keyword"},
                     "law_name": {"type": "keyword"},
                     "authority": {"type": "keyword"},
+                    "effective_date": {"type": "keyword"},
+                    "status": {"type": "keyword"},
                 }
             },
         }
@@ -174,6 +176,8 @@ class ESIndex:
                         "doc_type": c.get("doc_type", "law"),
                         "law_name": c.get("law_name", ""),
                         "authority": c.get("authority", ""),
+                        "effective_date": c.get("effective_date", ""),
+                        "status": c.get("status", "有效"),
                     },
                 }
             )
@@ -208,6 +212,7 @@ class ESIndex:
         doc_type_filter: Optional[str] = None,
         law_name_filter: Optional[str] = None,
         authority_filter: Optional[str] = None,
+        status_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """ES match 查询 + term 过滤，返回带 bm25_score 的 chunk 列表。"""
         if not self._connected or self._client is None or self.doc_count == 0:
@@ -223,6 +228,8 @@ class ESIndex:
             filters.append({"term": {"law_name": law_name_filter}})
         if authority_filter:
             filters.append({"term": {"authority": authority_filter}})
+        if status_filter:
+            filters.append({"term": {"status": status_filter}})
 
         body = {
             "query": {"bool": {"must": must, "filter": filters}},

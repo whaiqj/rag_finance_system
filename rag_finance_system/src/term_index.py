@@ -86,6 +86,7 @@ class TermIndex:
         doc_type_filter: Optional[str] = None,
         law_name_filter: Optional[str] = None,
         authority_filter: Optional[str] = None,
+        status_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """检索包含查询术语的 chunk。
 
@@ -129,6 +130,8 @@ class TermIndex:
             if law_name_filter and chunk.get("law_name", "") != law_name_filter:
                 continue
             if authority_filter and chunk.get("authority", "") != authority_filter:
+                continue
+            if status_filter and chunk.get("status", "") != status_filter:
                 continue
 
             scored.append((match_count, idf_sum, chunk))

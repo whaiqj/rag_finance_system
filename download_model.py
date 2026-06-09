@@ -1,15 +1,19 @@
-import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import os
+from pathlib import Path
 
-path = r"C:\Users\wangx\Desktop\rag_finance_system\rag_finance_system\models\bge-reranker-v2-m3"
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-print("开始加载 tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained(path, local_files_only=True)
+
+DEFAULT_RERANKER_PATH = Path(__file__).resolve().parent / "models" / "bge-reranker-v2-m3"
+MODEL_PATH = Path(os.getenv("RERANKER_MODEL_PATH", str(DEFAULT_RERANKER_PATH)))
+
+print(f"开始加载 tokenizer: {MODEL_PATH}")
+tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), local_files_only=True)
 
 print("开始加载 model...")
 model = AutoModelForSequenceClassification.from_pretrained(
-    path,
-    local_files_only=True
+    str(MODEL_PATH),
+    local_files_only=True,
 )
 
 print("加载成功！")

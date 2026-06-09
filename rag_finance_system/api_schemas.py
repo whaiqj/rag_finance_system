@@ -34,6 +34,7 @@ class SearchRequest(BaseModel):
     doc_type_filter: Optional[str] = None
     law_name_filter: Optional[str] = None
     authority_filter: Optional[str] = None
+    status_filter: Optional[str] = "有效"
     use_reranker: bool = True
 
 
@@ -59,6 +60,7 @@ class QARequest(BaseModel):
     use_reranker: bool = True
     use_query_rewrite: bool = True
     max_new_tokens: int = Field(default=1024, ge=64, le=4096)
+    include_historical: bool = False
 
 
 class SourceItem(BaseModel):

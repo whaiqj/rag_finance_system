@@ -1,250 +1,263 @@
 # 金融制度知识问答系统 (RAG Finance System)
 
-基于 RAG（检索增强生成）的金融法规智能问答系统，支持法条、案例、其他参考资料三类文档的智能检索、实体感知过滤、查询重写、语义问答、条文溯源与可信度评估。
+基于 RAG 的金融法规智能问答系统，当前采用 `Streamlit + FastAPI + Milvus` 架构，已接入金融词典、Elasticsearch/BM25 全文检索、术语倒排、RRF 融合、Reranker 精排、知识图谱补充召回与法规时效性过滤。
+
+## 当前状态
+
+- 核心问答链路已跑通：上传/建索引/检索/问答可用
+- 默认前端：`rag_finance_system/app.py`（Streamlit）
+- 默认后端：`rag_finance_system/api_app.py`（FastAPI）
+- 默认向量库：Milvus
+- 可选全文检索：Elasticsearch，缺失时自动回退 BM25
+- 可选知识图谱：Neo4j，缺失时自动跳过
+- 时效性管理已接入：默认仅检索 `有效` 版本，支持展开历史版本
+- MySQL 建表与基于 MySQL 的元数据管理尚未实现
 
 ## 架构概览
 
-```
-用户问题
-  │
-  ├── 实体检测 (文件名 / 法律名称 / 监管机构自动识别)
-  ├── 查询重写 (Qwen2.5-0.5B + LoRA → 回退主 LLM)
-  ├── 多过滤器向量检索 (bge-small-zh-v1.5 + Milvus)
-  │     └── 法律名 / 机构 / 来源文件 OR 组合 + doc_type AND 过滤
-  ├── Reranker 精排 (bge-reranker-v2-m3, Sigmoid 归一化)
-  ├── Prompt 组装 (System + Context + Question)
-  ├── LLM 生成 (Qwen2.5-7B / DeepSeek / 通义千问, 自动降级)
-  └── 可信度评分 + 溯源展示 + 改写查询回显
+```text
+app.py (Streamlit HTTP 客户端)
+  -> api_app.py (FastAPI)
+     -> DocumentProcessor
+     -> Embedder / Reranker
+     -> VectorStore (Milvus)
+     -> ESIndex / BM25Index
+     -> TermIndex
+     -> FinanceDictionary
+     -> KnowledgeGraph (optional)
+     -> RAGChain.query()
+        -> 实体检测
+        -> 查询扩展
+        -> 查询重写
+        -> 混合检索 (向量 + ES/BM25 + 术语倒排)
+        -> RRF 融合
+        -> Reranker 精排
+        -> LLM 生成
+        -> 溯源 + 可信度评分
 ```
 
-## 功能
+## 主要能力
 
-- **多类型文档解析**：支持法条 (law)、案例 (case)、其他参考资料 (other) 三种类型，PDF / TXT 格式
-- **智能分段策略**：
-  - 法条：按"第XX条"结构切分，条文内部递归切分，永不跨条
-  - 案例：按裁判文书标准段落结构切分
-  - 其他：三级优先级切分（第X条 → 中文序号 一、二、三… → 纯递归）
-- **实体感知检索**：从用户问题中自动识别文件名（《》内法规简称）、法律名称（公司法→中华人民共和国公司法）、监管机构（上海→上海银保监局），多过滤器 OR 组合检索
-- **元数据增强**：每个 chunk 自动提取法律名称 (law_name) 和发布机构 (authority)，支持精确过滤
-- **查询重写**：优先使用 Qwen2.5-0.5B + LoRA 微调模型，失败回退主 LLM；支持侧边栏开关
-- **四种检索模式**：全部 / 仅法条 / 仅案例 / 仅其他
-- **答案溯源**：每条回答附带来源文件、条文编号和相关度评分（绿/橙/红三色标识）
-- **可信度评分**：综合检索相关性（60%）与答案覆盖度（40%）
-- **多 LLM 后端**：本地 Qwen2.5-7B-Int4 / DeepSeek API / 通义千问 API，自动降级
-- **批量导入**：支持一键导入 testfiles 中的 148 份监管规范性文件
+- 金融法规 PDF/TXT 解析与分段
+- 法规、案例、其他资料三类文档问答
+- 金融词典实体检测、别名归一、缩写展开
+- Milvus 向量检索
+- Elasticsearch 全文检索，自动回退 BM25
+- 术语精确倒排召回
+- RRF 融合 + Reranker 精排
+- Neo4j 图谱补充召回（可选）
+- 法规 `effective_date` / `status` 时效性过滤
+- Streamlit 前端与 FastAPI 后端分离
 
 ## 技术栈
 
 | 组件 | 方案 |
 |------|------|
 | 前端 | Streamlit |
-| Embedding | bge-small-zh-v1.5 (512d) |
-| Reranker | bge-reranker-v2-m3 (Cross-Encoder + Sigmoid) |
-| 查询重写 | Qwen2.5-0.5B-Instruct + LoRA |
-| 向量数据库 | Milvus (本地/自建服务) |
-| LLM | Qwen2.5-7B-Instruct-GPTQ-Int4 / DeepSeek / 通义千问 |
-| 文档解析 | pdfplumber (PDF) + 自研分段器 |
+| 后端 | FastAPI |
+| Embedding | `BAAI/bge-small-zh-v1.5` |
+| Reranker | `BAAI/bge-reranker-v2-m3` |
+| 查询重写 | `Qwen2.5-0.5B-Instruct + LoRA` |
+| 向量数据库 | Milvus |
+| 全文检索 | Elasticsearch 8.x / 内存 BM25 回退 |
+| 知识图谱 | Neo4j 5.x（可选） |
+| LLM | 本地 Qwen / DeepSeek API / 通义千问 API |
 
-## 项目结构
+## 目录结构
 
-```
-rag_finance_system/
+```text
+.
 ├── README.md
 ├── requirements.txt
-├── .gitignore
-├── checkpoints/
-│   └── rewriter_lora/            # 查询重写器 LoRA 微调权重
-│       ├── checkpoint-136/
-│       ├── checkpoint-340/
-│       └── final/                # 最终版权重
+├── docker-compose.yml              # Milvus 本地部署
+├── download_model.py               # 本地 Reranker 模型校验脚本
 ├── data/
-│   ├── questions.json            # 600 条测试问答对 (question + query)
-│   ├── raw/                      # 上传文档存储
-│   │   ├── law/                  # 法条原文
-│   │   ├── case/                 # 案例原文
-│   │   └── other/                # 其他参考资料
-│   └── testfiles/                # 148 份地方监管规范性文件
-│       ├── 上海监管局/
-│       ├── 江苏监管局/
-│       └── 浙江监管局/
-├── Milvus 服务                    # 向量存储（本地/自建部署，仓库外部依赖）
-├── rag_finance_system/
-│   ├── .env                      # 环境配置 (不纳入版本控制)
-│   ├── app.py                    # Streamlit 前端
-│   ├── src/
-│   │   ├── __init__.py
-│   │   ├── document_processor.py # 文档解析 + 三轨智能分段
-│   │   ├── embedder.py           # Embedding + Reranker (Sigmoid)
-│   │   ├── vector_store.py       # Milvus 向量存储 (多维度过滤)
-│   │   ├── retriever.py          # 检索器 (多过滤器 OR + 精排 + 可信度)
-│   │   ├── rag_chain.py          # RAG 主链路 (实体检测 → 重写 → 检索 → 生成 → 溯源)
-│   │   ├── rewriter.py           # 查询重写器 (小模型 + LoRA)
-│   │   ├── llm.py                # LLM 推理 (本地/API 三路 + 自动降级)
-│   │   ├── change.py             # docx → txt 转换工具
-│   │   └── txt_files/            # 83 部中国金融法律原文
-│   └── tools/
-│       ├── convert_testfiles.py  # doc/docx → txt 批量转换 (LibreOffice)
-│       ├── generate_questions.py # 调用 API 从文档自动生成测试问题
-│       ├── generate_rewrite_data.py # 生成查询重写训练数据
-│       ├── rewrite_questions_for_rag.py # 批量重写问题为检索查询
-│       ├── train_rewriter.py     # LoRA 微调查询重写小模型
-│       └── import_testfiles.py   # 批量导入 testfiles 到向量库
-├── models/                       # 本地模型 (不纳入版本控制)
-│   ├── bge-small-zh-v1.5/
-│   └── bge-reranker-v2-m3/
-└── download_model.py             # 模型下载/验证脚本
+│   ├── finance_dictionary.json
+│   ├── dictionary_candidates.json
+│   └── raw/                        # 上传文件存储（运行时生成）
+├── models/                         # 本地模型目录（需自行准备，gitignored）
+└── rag_finance_system/
+    ├── .env
+    ├── .env.example
+    ├── app.py
+    ├── api_app.py
+    ├── api_schemas.py
+    ├── test_pipeline.py
+    ├── src/
+    │   ├── document_processor.py
+    │   ├── embedder.py
+    │   ├── vector_store.py
+    │   ├── bm25_index.py
+    │   ├── es_index.py
+    │   ├── term_index.py
+    │   ├── dictionary.py
+    │   ├── knowledge_graph.py
+    │   ├── graph_builder.py
+    │   ├── retriever.py
+    │   ├── rag_chain.py
+    │   ├── llm.py
+    │   ├── rewriter.py
+    │   └── txt_files/              # 83 部金融法律 txt 语料
+    └── tools/
+        ├── convert_testfiles.py
+        ├── import_testfiles.py
+        ├── extract_dictionary.py
+        ├── merge_dictionary.py
+        ├── generate_questions.py
+        ├── generate_rewrite_data.py
+        ├── rewrite_questions_for_rag.py
+        └── train_rewriter.py
 ```
 
-## 安装
+## 环境准备
+
+### 1. Python
+
+推荐 `Python 3.12.x`。
 
 ```bash
-# 克隆仓库
-git clone https://github.com/intnerd/rag_finance_system.git
-cd rag_finance_system
-
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate   # Linux/Mac
-# 或 venv\Scripts\activate  (Windows)
-
-# 安装依赖
+py -3 -m venv venv
+source venv/Scripts/activate
 pip install -r requirements.txt
-
-# 下载模型（如未包含在本地）
-# Embedding:  BAAI/bge-small-zh-v1.5
-# Reranker:   BAAI/bge-reranker-v2-m3
-# LLM:        Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4
-# Rewriter:   Qwen/Qwen2.5-0.5B-Instruct (自动从 HuggingFace 下载)
 ```
 
-## 配置
+### 2. 本地模型
 
-复制并编辑 `.env` 文件（仓库已含模板，API Key 需自行填写）：
+至少准备：
 
-```bash
-# 模型路径
+- `models/bge-small-zh-v1.5`
+- `models/bge-reranker-v2-m3`
+
+可选：
+
+- 本地 Qwen 主模型
+- 本地查询重写模型与 LoRA 权重
+
+`download_model.py` 会从 `RERANKER_MODEL_PATH` 或默认 `./models/bge-reranker-v2-m3` 读取模型做本地校验。
+
+### 3. 环境变量
+
+复制 `rag_finance_system/.env.example` 为 `rag_finance_system/.env` 后填写。
+
+关键配置示例：
+
+```env
 EMBEDDING_MODEL_PATH=./models/bge-small-zh-v1.5
 RERANKER_MODEL_PATH=./models/bge-reranker-v2-m3
 LLM_MODEL_PATH=./models/Qwen2.5-7B-Int4
 
-# API 密钥（本地模型不可用时自动切换）
-DEEPSEEK_API_KEY=sk-xxx
-DASHSCOPE_API_KEY=xxx
+DEEPSEEK_API_KEY=
+DASHSCOPE_API_KEY=
 
-# Milvus 连接配置（本地/自建服务）
 MILVUS_HOST=127.0.0.1
 MILVUS_PORT=19530
-# 或使用 URI
-# MILVUS_URI=http://127.0.0.1:19530
 MILVUS_COLLECTION_NAME=finance_regulations
 MILVUS_EMBED_DIM=512
-# 可选：数据库名 / 认证
-# MILVUS_DB_NAME=default
-# MILVUS_USER=
-# MILVUS_PASSWORD=
 
-# 检索参数
-RETRIEVER_TOP_K=10      # 向量检索召回数量
-RERANKER_TOP_N=5        # Reranker 后保留数量
-CHUNK_SIZE=512          # 分段字符数
-CHUNK_OVERLAP=100       # 分段重叠字符数
+ES_HOST=127.0.0.1
+ES_PORT=9200
+ES_SCHEME=http
+ES_INDEX_NAME=finance_regulations
+ES_ANALYZER=standard
+
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=neo4j
+NEO4J_DATABASE=neo4j
+
+# 可选：LibreOffice 路径
+# SOFFICE_PATH=C:/Program Files/LibreOffice/program/soffice.exe
 ```
 
-## 使用
+## 启动方式
 
-### 启动前端
+### 启动 Milvus
+
+仓库根目录已提供 `docker-compose.yml`，当前只包含 Milvus 依赖服务：
 
 ```bash
-streamlit run rag_finance_system/app.py
+docker compose up -d
 ```
 
-### 前端操作流程
+默认暴露：
 
-1. **上传文档**：侧边栏三个独立上传区分别对应法条、案例、其他资料
-2. **建立索引**：点击对应"解析并建立索引"按钮
-3. **选择模式**：全部 / 仅法条 / 仅案例 / 仅其他
-4. **提问**：输入自然语言问题，系统自动进行实体检测和查询重写
-5. **查看结果**：答案附带溯源条文（可展开）和可信度评分
-6. **侧边栏选项**：可切换 API 模式、开关 Reranker、开关查询重写
+- Milvus: `19530`
+- Milvus health/admin: `9091`
+- MinIO Console: `9001`
 
-### 命令行工具
+### 启动 FastAPI
 
 ```bash
-# 将 testfiles 中的 .doc/.docx 文件转换为 .txt
-python rag_finance_system/tools/convert_testfiles.py
-
-# 批量导入 testfiles 到向量库
-python rag_finance_system/tools/import_testfiles.py
-
-# 从文档自动生成测试问题
-python rag_finance_system/tools/generate_questions.py
-
-# 批量重写问题为检索查询
-python rag_finance_system/tools/rewrite_questions_for_rag.py
-
-# 生成查询重写训练数据
-python rag_finance_system/tools/generate_rewrite_data.py --mode api
-
-# LoRA 微调查询重写模型
-python rag_finance_system/tools/train_rewriter.py
+py -3 -m uvicorn rag_finance_system.api_app:app --host 0.0.0.0 --port 8000
 ```
 
-## 文档格式要求
+### 启动 Streamlit
 
-### 法条文档 (doc_type=law)
-
-无特殊格式要求，系统会自动识别"第XX条"结构并按条切分。支持《中华人民共和国XX法》格式的法律文件。
-
-### 案例文档 (doc_type=case)
-
-需遵循中国裁判文书标准格式（最高人民法院法〔2016〕221 号规范），包含以下结构段落：
-
-- `当事人信息：` / `原告诉称：` / `被告辩称：`
-- `诉讼请求：`
-- `事实与理由：`
-- `经审理查明：`
-- `本院认为：`
-- `判决如下：` / `裁定如下：`
-
-来自中国裁判文书网 (wenshu.court.gov.cn) 或北大法宝等数据库的文书天然符合此格式。
-
-### 其他参考资料 (doc_type=other)
-
-适用于学术文献、研究报告、监管通知、指导意见、政策解读等。系统自动选择最优切分策略：
-1. 优先按"第X条"切分（适用于管理办法/实施细则类）
-2. 否则按中文序号"一、二、三…"切分（适用于通知/指导意见类）
-3. 兜底按固定字符数递归切分（适用于公告/模板类）
-
-## 工作流程
-
-```
-文档上传 → PDF/TXT 解析 → 智能分段（法条/案例/其他三轨）
-  → 元数据提取（法律名、发布机构） → Embedding → Milvus 存储
-
-用户提问 → 实体检测（文件名/法律名/机构）
-  → 查询重写（小模型 + LoRA → 回退主 LLM）
-  → 多过滤器向量检索 (Top-10, 维度 OR + 类型 AND)
-  → Reranker 精排 (Top-5, Sigmoid 归一化)
-  → Prompt 组装 (System + Context + Question)
-  → LLM 生成（本地 → DeepSeek → 通义千问 自动降级）
-  → 答案 + 溯源 + 可信度 + 改写查询回显
+```bash
+py -3 -m streamlit run rag_finance_system/app.py
 ```
 
-## 创新点
+## 使用说明
 
-1. **实体感知检索**：从自然语言问题中自动识别法律名称、监管机构、文件名称，无需用户手动筛选
-2. **三轨文档处理**：法条、案例、其他参考资料各自采用最优切分策略，元数据自动提取
-3. **查询重写 + 微调**：专用小模型 + LoRA 微调，高效改写口语化问题为检索友好查询
-4. **多维度溯源**：每条答案附带来源文件、条文编号、相关度评分（绿/橙/红三色可视标识）
-5. **可信度评分**：检索相关性 × 答案覆盖度双重评估，辅助用户判断是否需人工复核
+### 前端使用
 
-## 路线图
+1. 启动 FastAPI 与 Streamlit
+2. 在侧边栏确认 API URL 可连通
+3. 上传 PDF/TXT 文件并建立索引
+4. 选择检索范围：全部 / 仅法条 / 仅案例 / 仅其他
+5. 输入问题，查看答案、溯源与可信度
 
-参见 [rag金融知识技术路线.md](rag_finance_system/rag金融知识技术路线.md) 了解后续规划：
+### 批量导入内置法规语料
 
-- Elasticsearch BM25 倒排索引 + 混合检索 (RRF 融合)
-- Neo4j 知识图谱（条文引用关系网络）
-- OCR 增强管线（扫描件支持）
-- MySQL 元数据管理 + 时效性/废止检测
-- FastAPI 后端 + Vue 3 前端
-- Docker Compose 一键部署
+前端侧边栏支持一键导入 `rag_finance_system/src/txt_files/*.txt`。
+
+命令行也可直接执行：
+
+```bash
+py -3 rag_finance_system/tools/import_testfiles.py
+```
+
+该脚本当前会按 `law` 类型导入 `src/txt_files` 目录中的法规语料。
+
+### 词典自动抽取
+
+```bash
+py -3 rag_finance_system/tools/extract_dictionary.py
+py -3 rag_finance_system/tools/merge_dictionary.py
+```
+
+- `extract_dictionary.py`：从 `src/txt_files` 扫描候选法规名、机构名、术语
+- `merge_dictionary.py`：做质量过滤并合并到 `data/finance_dictionary.json`
+
+### LibreOffice 文档转换
+
+```bash
+py -3 rag_finance_system/tools/convert_testfiles.py
+```
+
+该脚本用于把 `data/testfiles` 下的 `.doc/.docx` 转成 `.txt`。优先读取 `SOFFICE_PATH`，否则尝试从 `PATH` 或常见安装目录查找 `soffice`。
+
+## 检索与时效性说明
+
+- 检索后端优先级：`Elasticsearch -> BM25 -> 纯向量`
+- 术语倒排召回会与向量/全文检索一起参与 RRF 融合
+- 默认 `status_filter="有效"`
+- 问答接口可通过 `include_historical=true` 展开历史版本
+- 旧 Milvus collection 若缺少 `effective_date/status` 字段，需要删除旧 collection 后全量重建索引
+
+## 当前未完成项
+
+- MySQL 建表与元数据管理
+- FastAPI + Streamlit + 检索依赖的一体化 Docker Compose 部署
+- `.env.example` 之外的完整部署模板与初始化脚本
+- README 中未单独整理 Windows / Linux 部署差异
+
+## 工程化清理说明
+
+本轮已完成：
+
+- 移除未使用依赖：`faiss-cpu`、`langchain*`、`langgraph*`
+- 去除 `download_model.py` 中的本机绝对路径
+- 去除 `convert_testfiles.py` 中固定 LibreOffice 路径依赖
+- 修正 `embedder.py` 中 `bge-large` 的过期描述为当前 `bge-small`
+- 修正批量导入 `src/txt_files` 时误用 `other` 类型的问题

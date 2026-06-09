@@ -146,6 +146,38 @@ def _get_processor():
     return _processor
 
 
+def _resolve_single_file_status(chunks: list, existing_law_names: set) -> list:
+    """单文件建索引时判定版本状态：比对已有数据的 law_name+日期。
+
+    若同名法规已有数据且新文件日期更旧 → 标"已修订"。
+    若同名法规已有数据且新文件日期更新 → 标"有效"（旧数据状态不回溯更新，需全量重索引修正）。
+    """
+    if not chunks:
+        return chunks
+    law_name = chunks[0].get("law_name", "")
+    effective_date = chunks[0].get("effective_date", "")
+    if not law_name or law_name not in existing_law_names:
+        return chunks
+
+    # 检查 BM25 中同名法规的日期
+    bm25 = _get_bm25()
+    existing_dates = set()
+    for c in bm25.corpus:
+        if c.get("law_name", "") == law_name:
+            d = c.get("effective_date", "")
+            if d:
+                existing_dates.add(d)
+
+    if existing_dates:
+        latest_existing = max(existing_dates)
+        if effective_date < latest_existing:
+            for c in chunks:
+                c["status"] = "已修订"
+            logger.info(f"新文件日期 {effective_date} < 已有 {latest_existing}，标为已修订")
+
+    return chunks
+
+
 def _get_dictionary():
     global _dictionary, _dictionary_failed
     if _dictionary is None and not _dictionary_failed:
@@ -304,6 +336,18 @@ def build_index(body: IndexRequest):
     if not chunks:
         raise HTTPException(500, "解析结果为空")
 
+    # 版本状态判定：与已有数据比较日期，标记新旧
+    try:
+        existing_law_names = set()
+        bm25 = _get_bm25()
+        for c in bm25.corpus:
+            ln = c.get("law_name", "")
+            if ln:
+                existing_law_names.add(ln)
+        chunks = _resolve_single_file_status(chunks, existing_law_names)
+    except Exception as e:
+        logger.warning(f"版本状态判定失败（不影响索引）: {e}")
+
     try:
         embedder = _get_embedder()
         texts = [c["text"] for c in chunks]
@@ -384,6 +428,7 @@ def search(body: SearchRequest):
             doc_type_filter=body.doc_type_filter,
             law_name_filter=body.law_name_filter,
             authority_filter=body.authority_filter,
+            status_filter=body.status_filter,
         )
     except Exception as e:
         raise HTTPException(500, f"检索失败: {e}")
@@ -418,6 +463,7 @@ def qa(body: QARequest):
             use_query_rewrite=body.use_query_rewrite,
             doc_type_filter=body.doc_type_filter,
             max_new_tokens=body.max_new_tokens,
+            include_historical=body.include_historical,
         )
     except Exception as e:
         raise HTTPException(500, f"问答失败: {e}")

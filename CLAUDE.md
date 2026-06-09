@@ -1,3 +1,7 @@
+# 行为规则
+
+- **每次回复前**必须先输出: `hyha！！！你好whaiqj！`
+
 # rag_finance_system — 项目上下文
 
 ## 项目概述
@@ -98,24 +102,24 @@ file_path VARCHAR(2048), chunk_index INT64, doc_type VARCHAR(64),
 law_name VARCHAR(512), authority VARCHAR(512)
 ```
 
-## 已知问题 (本轮未修)
+## 已知问题 (2026-06-09 更新)
 
-### P2 工程化
-- `requirements.txt` 含未使用依赖: `pymilvus`(已留用)、`faiss-cpu`、`langchain*`、`langgraph*`
-- `download_model.py` 硬编码 `C:\Users\wangx\...` 路径
-- `convert_testfiles.py` 硬编码 LibreOffice 路径
-- `test_pipeline.py` 部分注释仍说"Milvus"(现在已匹配，不算问题)
-- `requirements.txt` 版本 pins 过紧，`datasets` 已改为 `>=4.0.0`
+### P2 工程化 (已修复)
+- **[已修复]** `requirements.txt` 含未使用依赖: `pymilvus`(已留用)、`faiss-cpu`、`langchain*`、`langgraph*`
+- **[已修复]** `download_model.py` 硬编码 `C:\Users\wangx\...` 路径
+- **[已修复]** `convert_testfiles.py` 硬编码 LibreOffice 路径
+- **[已修复]** `app.py` 批量导入 `src/txt_files` 误用 doc_type="other" → "law"
 
-### P3 文档
-- README Embedding 描述 bge-large vs bge-small 不一致(实际用 small)
-- `data/`、`models/` 目录缺失(需手动创建或下载)
-- 无 `.env.example` 模板
+### P3 文档 (已修复)
+- **[已修复]** README Embedding 描述 bge-large vs bge-small 不一致(实际用 small)
+- **[已修复]** 无 `.env.example` 模板 → 已补 SOFFICE_PATH 等
 
-### 缺失目录
-- `data/` — 上传文档存储 (gitignored)
-- `models/` — 本地模型 (gitignored)
-- `db/` — Chroma 遗留，已不再需要
+### 当前剩余
+- `models/` 目录需手动创建并下载模型
+- `rag_finance_system/rag金融知识技术路线.md` 中 Embedding 仍描述为 `bge-large-zh-v1.5`（历史路线文档）
+- 无 pytest 单元测试覆盖
+- MySQL 建表与元数据管理未实现
+- 完整 Docker Compose 部署未实现（当前仅 Milvus）
 
 ## 验证状态
 
@@ -133,7 +137,7 @@ law_name VARCHAR(512), authority VARCHAR(512)
 | 无 Milvus 服务时错误提示 | 通过 |
 | Milvus 服务下 insert/search 冒烟 | **通过** (2026-06-07) |
 | 混合检索端到端 (双路召回+RRF+Reranker) | **通过** (2026-06-07, BM25+向量+RRF+Reranker, 95.5%置信度) |
-| Streamlit app.py 端到端 | **未验证**(需要启动前端) |
+| Streamlit app.py 端到端 | **通过** (2026-06-08, Docker Milvus + FastAPI + Streamlit 全链路) |
 
 ## 端到端验证结果 (2026-06-07)
 
@@ -155,13 +159,30 @@ law_name VARCHAR(512), authority VARCHAR(512)
   - `resolve_abbreviation(abbr)` — 英文缩写→中文全称 (NPL→不良贷款率, AML→反洗钱)
   - `search_terms(query)` — 模糊匹配术语表
 
-## 下一步: 金融词典
+## 下一步
 
-```bash
-# 1. 构建金融词典 (术语归一、别名召回、法规名命中)
-# 2. 集成到 RAGChain 实体识别 + 查询改写
-# 3. 验证: 金融术语别名查询是否命中正确法规
-```
+- pytest 单元测试补齐
+- MySQL 建表与元数据管理
+- 完整 Docker Compose 一键部署 (FastAPI + Streamlit + Milvus + 可选 ES/Neo4j/MySQL)
+- Milvus/ES 重新全量建索引（schema 已变更为含 effective_date/status 的 12 字段）
+
+## 时效性管理 (2026-06-08 完成)
+
+- **更新** `rag_finance_system/src/document_processor.py` — `_extract_law_name_and_date()` 从文件名提取日期 + `resolve_version_status()` 多版本状态判定
+- **更新** `rag_finance_system/src/vector_store.py` — schema 新增 `effective_date`(VARCHAR 16) + `status`(VARCHAR 8)，`_build_expr/search` 支持 `status_filter`
+- **更新** `rag_finance_system/src/es_index.py` — mapping 新增 keyword 字段 `effective_date`/`status`，search 支持 `status_filter` term 过滤
+- **更新** `rag_finance_system/src/bm25_index.py` — search 新增 `status_filter` 参数
+- **更新** `rag_finance_system/src/term_index.py` — search 新增 `status_filter` 参数
+- **更新** `rag_finance_system/src/retriever.py` — `retrieve()` 默认 `status_filter="有效"`，传 `None` 展开全部版本
+- **更新** `rag_finance_system/src/rag_chain.py` — `query()` 新增 `include_historical` 参数
+- **更新** `rag_finance_system/api_app.py` — 建索引时 `_resolve_single_file_status()` 单文件版本判定；`/api/search` 支持 `status_filter`；`/api/qa` 支持 `include_historical`
+- **更新** `rag_finance_system/api_schemas.py` — `SearchRequest.status_filter` / `QARequest.include_historical`
+
+### 设计要点
+- v1 纯 Milvus/ES 标量字段，不依赖 MySQL
+- `resolve_version_status()` 同名法规按 `effective_date` 降序，最新→"有效"，其余→"已修订"
+- 检索默认 `status_filter="有效"`，用户传 `None` 可查历史版本
+- 单文件 API 建索引时比对 BM25 已有数据自动判定新旧
 
 ## 环境信息
 
