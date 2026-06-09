@@ -16,8 +16,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 load_dotenv()
 
 EMBEDDING_MODEL_PATH = os.getenv("EMBEDDING_MODEL_PATH", "BAAI/bge-small-zh-v1.5")
-RERANKER_MODEL_PATH = "BAAI/bge-reranker-v2-m3"
-#RERANKER_MODEL_PATH = os.getenv("RERANKER_MODEL_PATH", "./models/bge-reranker-v2-m3")
+RERANKER_MODEL_PATH = os.getenv("RERANKER_MODEL_PATH", "BAAI/bge-reranker-v2-m3")
 
 
 class Embedder:

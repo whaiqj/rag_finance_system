@@ -5,6 +5,7 @@ from .vector_store import VectorStore
 from .retriever import Retriever
 from .llm import get_llm, LocalLLM, QwenAPILLM
 from .rag_chain import RAGChain
+from .term_index import TermIndex
 
 __all__ = [
     "DocumentProcessor",
@@ -16,4 +17,5 @@ __all__ = [
     "LocalLLM",
     "QwenAPILLM",
     "RAGChain",
+    "TermIndex",
 ]

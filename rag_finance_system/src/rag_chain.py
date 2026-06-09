@@ -180,12 +180,13 @@ QUERY_REWRITE_SYSTEM_PROMPT = """你是一个中文检索查询改写助手。
 请保留关键实体和意图，去掉无关废话，仅输出改写后的查询，不要输出额外解释或格式说明。"""
 
 
-def build_prompt(query: str, chunks: List[Dict[str, Any]]) -> List[dict]:
+def build_prompt(query: str, chunks: List[Dict[str, Any]], graph_facts: Optional[List[str]] = None) -> List[dict]:
     """
     组装Prompt消息列表
     Args:
         query: 用户问题
         chunks: 检索到的相关chunks
+        graph_facts: 图谱补充事实
     Returns:
         messages列表（适配OpenAI格式）
     """
@@ -207,8 +208,14 @@ def build_prompt(query: str, chunks: List[Dict[str, Any]]) -> List[dict]:
             context_parts.append(f"{i}. {source_tag}\n{chunk['text']}")
         context = "\n\n".join(context_parts)
 
+    graph_context = ""
+    if graph_facts:
+        graph_context = "\n\n【图谱补充关系】\n" + "\n".join(
+            f"- {fact}" for fact in graph_facts
+        )
+
     user_message = f"""【参考条文】
-{context}
+{context}{graph_context}
 
 【用户问题】
 {query}
@@ -224,14 +231,15 @@ def build_prompt(query: str, chunks: List[Dict[str, Any]]) -> List[dict]:
 class RAGChain:
     """
     RAG主链路
-    整合：Retriever（检索） + LLM（生成）
+    整合：Retriever（检索） + LLM（生成） + FinanceDictionary（实体识别） + KnowledgeGraph（图谱扩展）
     """
 
-    def __init__(self, retriever, llm, case_retriever=None, rewriter=None):
+    def __init__(self, retriever, llm, rewriter=None, dictionary=None, knowledge_graph=None):
         self.retriever = retriever
         self.llm = llm
-        self.case_retriever = case_retriever
         self.rewriter = rewriter
+        self.dictionary = dictionary
+        self.kg = knowledge_graph
 
     @staticmethod
     def _detect_source(question: str) -> Optional[str]:
@@ -240,7 +248,6 @@ class RAGChain:
         "上海银行业金融机构防范非法集资工作机制"  →  "上海银保监局办公室关于印发《...》的通知"
         优先匹配最长的键（避免"上海"被误匹配为机构而不是文件名的一部分）。
         """
-        # 按键长度降序匹配，优先命中长键（具体文件名）而非短键（城市名）
         for short in sorted(_SOURCE_INDEX, key=len, reverse=True):
             if len(short) >= 6 and short in question:
                 full = _SOURCE_INDEX[short]
@@ -248,31 +255,33 @@ class RAGChain:
                 return full
         return None
 
-    @staticmethod
-    def _detect_law_name(question: str) -> Optional[str]:
-        """从问题中识别提及的法律名称，返回全名或 None。
-
-        "根据公司法，股东责任是什么？"  →  "中华人民共和国公司法"
-        "保险法对投保人的保护"          →  "中华人民共和国保险法"
-        "资本充足率要求"                →  None（未提及具体法律）
-        """
+    def _detect_law_name(self, question: str) -> Optional[str]:
+        """优先使用词典检测法律名称，回退到文件名索引。"""
+        if self.dictionary:
+            entities = self.dictionary.detect_entities(question)
+            if entities["law_names"]:
+                law = entities["law_names"][0]
+                logger.info(f"词典检测法律: {law}")
+                return law
+        # 回退：旧文件名索引
         for short, full in _LAW_NAME_INDEX.items():
             if len(short) >= 3 and short in question:
-                logger.info(f"检测到法律名称: {short} → {full}")
+                logger.info(f"索引检测法律: {short} → {full}")
                 return full
         return None
 
-    @staticmethod
-    def _detect_authority(question: str) -> Optional[str]:
-        """从问题中识别提及的监管机构，返回全名（可能有多个，逗号分隔）或 None。
-
-        "上海监管局对保险中介有什么规定？"  →  "上海保监局,上海银保监局"
-        "南通分局关于案件防控的指导意见"    →  "南通监管分局"
-        "保险公司资本充足率要求"            →  None（未提及具体机构）
-        """
+    def _detect_authority(self, question: str) -> Optional[str]:
+        """优先使用词典检测监管机构，回退到文件名索引。"""
+        if self.dictionary:
+            entities = self.dictionary.detect_entities(question)
+            if entities["authorities"]:
+                auth = ",".join(entities["authorities"])
+                logger.info(f"词典检测机构: {auth}")
+                return auth
+        # 回退：旧文件名索引
         for short, full in _AUTHORITY_INDEX.items():
             if len(short) >= 2 and short in question:
-                logger.info(f"检测到监管机构: {short} → {full}")
+                logger.info(f"索引检测机构: {short} → {full}")
                 return full
         return None
 
@@ -302,6 +311,7 @@ class RAGChain:
         top_k: Optional[int] = None,
         use_reranker: bool = True,
         use_query_rewrite: bool = True,
+        use_query_expansion: bool = True,
         source_filter: Optional[str] = None,
         doc_type_filter: Optional[str] = None,
         max_new_tokens: int = 1024,
@@ -318,17 +328,65 @@ class RAGChain:
         """
         logger.info(f"问答请求: {question[:60]}...")
 
-        # 0. 检测问题中提及的具体文件名、法律名称、监管机构
-        # 优先级：source（最长最精确）→ law_name → authority（最短最泛化）
-        source_filter = self._detect_source(question)
-        law_name_filter = self._detect_law_name(question) if not source_filter else None
-        authority_filter = self._detect_authority(question) if not source_filter else None
+        # 0. 词典实体检测 + 查询扩展
+        law_name_filter = None
+        authority_filter = None
+        expanded_query = question
+        entities: dict[str, list[str]] = {"terms": [], "law_names": [], "authorities": []}
 
-        # 1. 查询重写
-        rewritten_query = question
+        if self.dictionary:
+            entities = self.dictionary.detect_entities(question)
+            if entities["law_names"]:
+                law_name_filter = entities["law_names"][0]
+            if entities["authorities"]:
+                authority_filter = ",".join(entities["authorities"])
+            if use_query_expansion and entities["terms"]:
+                expanded_query = self.dictionary.expand_query(question)
+
+        # 0b. 文件名检测 → source_filter（词典不覆盖，由实际文件索引提供）
+        source_filter = self._detect_source(question)
+
+        # 文件名检测命中时，不再用 law_name/authority 过滤（source 更精确）
+        if source_filter:
+            law_name_filter = None
+            authority_filter = None
+        else:
+            # 词典未命中时回退旧索引
+            if not law_name_filter:
+                law_name_filter = self._detect_law_name(question)
+            if not authority_filter:
+                authority_filter = self._detect_authority(question)
+
+        # 1. 查询重写（对扩展后的查询做重写，保留别名提升召回）
+        rewritten_query = expanded_query
         if use_query_rewrite:
-            rewritten_query = self.rewrite_query(question)
+            rewritten_query = self.rewrite_query(expanded_query)
             logger.info(f"重写查询: {rewritten_query[:80]}...")
+
+        # 1b. 知识图谱扩展召回
+        graph_articles: list[dict] = []
+        graph_facts: list[str] = []
+        if self.kg and self.kg._connected:
+            try:
+                authority_list = entities.get("authorities") if self.dictionary else None
+                graph_articles = self.kg.get_related_articles(
+                    law_names=[law_name_filter] if law_name_filter else None,
+                    terms=entities.get("terms") if self.dictionary else None,
+                    authorities=authority_list,
+                    max_results=5,
+                )
+                graph_facts = self.kg.get_graph_facts(
+                    law_names=[law_name_filter] if law_name_filter else None,
+                    terms=entities.get("terms") if self.dictionary else None,
+                    authorities=authority_list,
+                    max_results=6,
+                )
+                if graph_articles:
+                    logger.info(f"图谱扩展召回 {len(graph_articles)} 条关联条文")
+                if graph_facts:
+                    logger.info(f"图谱补充关系 {len(graph_facts)} 条")
+            except Exception as e:
+                logger.warning(f"图谱扩展失败: {e}")
 
         # 2. 检索
         chunks = self.retriever.retrieve(
@@ -340,8 +398,24 @@ class RAGChain:
             law_name_filter=law_name_filter,
             authority_filter=authority_filter,
         )
-        # 2. 构建Prompt
-        messages = build_prompt(question, chunks)
+        # 2b. 合并图谱扩展结果到检索结果后（图谱结果排在后，不参与reranker评分）
+        seen_chunk_ids = {c.get("chunk_id", "") for c in chunks}
+        for ga in graph_articles:
+            gid = ga.get("chunk_id", "")
+            if gid and gid not in seen_chunk_ids:
+                seen_chunk_ids.add(gid)
+                chunks.append({
+                    "text": ga.get("text", ""),
+                    "source": ga.get("source", ""),
+                    "article_num": ga.get("article_num", ""),
+                    "doc_type": "law",
+                    "law_name": ga.get("law_name", ""),
+                    "score": 0.0,
+                    "_graph_relation": ga.get("relation", ""),
+                })
+
+        # 3. 构建Prompt
+        messages = build_prompt(question, chunks, graph_facts=graph_facts)
 
         # 3. LLM生成
         answer = self.llm.generate(messages, max_new_tokens=max_new_tokens)
