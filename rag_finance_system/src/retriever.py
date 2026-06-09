@@ -86,8 +86,12 @@ class Retriever:
         doc_type_filter: Optional[str] = None,
         law_name_filter: Optional[str] = None,
         authority_filter: Optional[str] = None,
+        status_filter: Optional[str] = "有效",
     ) -> List[Dict[str, Any]]:
-        """端到端检索：多路召回 → RRF融合 → Reranker精排"""
+        """端到端检索：多路召回 → RRF融合 → Reranker精排
+
+        status_filter 默认 "有效"，传 None 展开全部历史版本。
+        """
         k = top_k or self.top_k
 
         logger.info(f"检索: {query[:50]}...")
@@ -123,6 +127,7 @@ class Retriever:
                 doc_type_filter=where.get("doc_type"),
                 law_name_filter=where.get("law_name"),
                 authority_filter=where.get("authority"),
+                status_filter=status_filter,
             )
             for c in batch:
                 cid = c.get("chunk_id", "")
@@ -160,6 +165,7 @@ class Retriever:
                         doc_type_filter=where.get("doc_type"),
                         law_name_filter=where.get("law_name"),
                         authority_filter=where.get("authority"),
+                        status_filter=status_filter,
                     )
                 except Exception as e:
                     logger.warning(f"全文检索后端查询失败: {e}")
@@ -185,6 +191,7 @@ class Retriever:
                     doc_type_filter=doc_type_filter,
                     law_name_filter=law_name_filter,
                     authority_filter=authority_filter,
+                    status_filter=status_filter,
                 )
                 term_candidates = sorted(
                     term_candidates_raw,

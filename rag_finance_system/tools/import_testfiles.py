@@ -1,5 +1,5 @@
 """
-一次性脚本：将 data/testfiles/ 下所有 .txt 文件导入向量库（doc_type="other"）。
+一次性脚本：将 src/txt_files/ 下所有 .txt 文件导入向量库（doc_type="law"）。
 用法：python tools/import_testfiles.py
 """
 import sys
@@ -11,7 +11,7 @@ from rag_finance_system.src.document_processor import DocumentProcessor
 from rag_finance_system.src.embedder import Embedder
 from rag_finance_system.src.vector_store import VectorStore
 
-BASE = Path(__file__).resolve().parent.parent.parent / "data" / "testfiles"
+BASE = Path(__file__).resolve().parent.parent / "src" / "txt_files"
 
 processor = DocumentProcessor()
 embedder = Embedder()
@@ -23,7 +23,7 @@ print(f"找到 {len(files)} 个 .txt 文件")
 total = 0
 for f in files:
     try:
-        chunks = processor.process_file(str(f), doc_type="other")
+        chunks = processor.process_file(str(f), doc_type="law")
         texts = [c["text"] for c in chunks]
         embeddings = embedder.encode_documents(texts)
         n = store.insert(chunks, embeddings)

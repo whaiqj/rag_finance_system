@@ -1,6 +1,6 @@
 """
 embedder.py
-Embedding模型封装（bge-large-zh-v1.5）
+Embedding模型封装（bge-small-zh-v1.5）
 支持：文本→向量，批量编码，GPU自动检测
 """
 
@@ -22,7 +22,7 @@ RERANKER_MODEL_PATH = os.getenv("RERANKER_MODEL_PATH", "BAAI/bge-reranker-v2-m3"
 class Embedder:
     """
     Embedding模型封装
-    模型：bge-large-zh-v1.5，输出维度1024
+    模型：bge-small-zh-v1.5，输出维度由模型配置决定
     """
 
     def __init__(self, model_path: str = EMBEDDING_MODEL_PATH):

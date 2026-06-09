@@ -195,16 +195,17 @@ with st.sidebar:
     st.divider()
     st.subheader("批量导入")
     if st.button(
-        "一键导入 data/testfiles 中的 TXT 文件",
+        "一键导入 src/txt_files 中的 TXT 文件",
         type="secondary",
         key="batch_import",
         disabled=not st.session_state.api_ok,
     ):
         import glob as _glob
         from pathlib import Path as _Path
-        _txt_files = sorted(_glob.glob(str(_Path("data/testfiles") / "**" / "*.txt"), recursive=True))
+        _txt_dir = _Path(__file__).resolve().parent / "src" / "txt_files"
+        _txt_files = sorted(_glob.glob(str(_txt_dir / "*.txt")))
         if not _txt_files:
-            st.warning("未找到 .txt 文件，请先运行 tools/convert_testfiles.py 转换")
+            st.warning(f"未找到 .txt 文件: {_txt_dir}")
         else:
             progress = st.progress(0, text=f"0/{len(_txt_files)}")
             total_chunks = 0
@@ -213,8 +214,8 @@ with st.sidebar:
                 fname = _Path(fp).name
                 try:
                     with open(fp, "rb") as fh:
-                        up = upload_file(api_base, fh.read(), fname, "other")
-                    ix = index_file(api_base, up["file_path"], "other")
+                        up = upload_file(api_base, fh.read(), fname, "law")
+                    ix = index_file(api_base, up["file_path"], "law")
                     total_chunks += ix["chunk_count"]
                 except Exception as e:
                     st.warning(f"跳过 {fname}: {e}")

@@ -61,6 +61,7 @@ class BM25Index:
         doc_type_filter: Optional[str] = None,
         law_name_filter: Optional[str] = None,
         authority_filter: Optional[str] = None,
+        status_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """BM25 检索，返回带 bm25_score 的 chunk 列表。"""
         if self.doc_count == 0:
@@ -79,6 +80,8 @@ class BM25Index:
             if law_name_filter and c.get("law_name", "") != law_name_filter:
                 continue
             if authority_filter and c.get("authority", "") != authority_filter:
+                continue
+            if status_filter and c.get("status", "") != status_filter:
                 continue
 
             s = self._bm25_score(query_tokens, doc_tokens)
