@@ -39,6 +39,7 @@ app.py (Streamlit HTTP 客户端)
 ## 主要能力
 
 - 金融法规 PDF/TXT 解析与分段
+- PDF 文本层不足时自动 OCR 回退（PaddleOCR + Docling 双后端）
 - 法规、案例、其他资料三类文档问答
 - 金融词典实体检测、别名归一、缩写展开
 - Milvus 向量检索
@@ -61,6 +62,7 @@ app.py (Streamlit HTTP 客户端)
 | 向量数据库 | Milvus |
 | 全文检索 | Elasticsearch 8.x / 内存 BM25 回退 |
 | 知识图谱 | Neo4j 5.x（可选） |
+| OCR | PaddleOCR + Docling 双后端（PDF 文本层不足时自动回退） |
 | LLM | 本地 Qwen / DeepSeek API / 通义千问 API |
 
 ## 目录结构
@@ -86,6 +88,7 @@ app.py (Streamlit HTTP 客户端)
     ├── src/
     │   ├── document_processor.py
     │   ├── embedder.py
+    │   ├── change.py
     │   ├── vector_store.py
     │   ├── bm25_index.py
     │   ├── es_index.py
