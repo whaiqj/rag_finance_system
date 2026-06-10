@@ -34,6 +34,7 @@ class VectorStore:
         db_name = os.getenv("MILVUS_DB_NAME", "")
         self.embed_dim = self._read_embed_dim()
         self._index_type: Optional[str] = None
+        self._schema_fields: set = set()
 
         # .db 本地文件 → POSIX 绝对路径；否则用 HTTP 连接
         if local_db:
@@ -76,9 +77,18 @@ class VectorStore:
         if self.client.has_collection(self.collection_name):
             self.client.load_collection(self.collection_name)
             self._index_type = self._detect_index_type()
+            self._cache_schema_fields()
             logger.info(f"已加载 Milvus collection: {self.collection_name}")
         else:
             logger.info(f"Milvus collection 不存在，将在首次写入时创建: {self.collection_name}")
+
+    def _cache_schema_fields(self):
+        """缓存当前 collection 的字段名，用于向后兼容旧 schema。"""
+        try:
+            desc = self.client.describe_collection(self.collection_name)
+            self._schema_fields = {f["name"] for f in desc.get("fields", [])}
+        except Exception:
+            self._schema_fields = set()
 
     def _detect_index_type(self) -> Optional[str]:
         try:
@@ -201,7 +211,7 @@ class VectorStore:
             "authority": authority_filter,
             "status": status_filter,
         }.items():
-            if value:
+            if value and key in self._schema_fields:
                 clauses.append(f'{key} == "{self._escape_expr_value(str(value))}"')
         return " and ".join(clauses) if clauses else ""
 
@@ -316,16 +326,12 @@ class VectorStore:
 
         search_params = self._get_search_params()
         output_fields = [
-            "text",
-            "source",
-            "chunk_id",
-            "article_num",
-            "file_path",
-            "chunk_index",
-            "doc_type",
-            "law_name",
-            "authority",
+            "text", "source", "chunk_id", "article_num", "file_path",
+            "chunk_index", "doc_type", "law_name", "authority",
         ]
+        for opt_field in ("effective_date", "status"):
+            if opt_field in self._schema_fields:
+                output_fields.append(opt_field)
 
         results = self.client.search(
             collection_name=self.collection_name,
@@ -353,6 +359,8 @@ class VectorStore:
                     "doc_type": entity.get("doc_type", "law"),
                     "law_name": entity.get("law_name", ""),
                     "authority": entity.get("authority", ""),
+                    "effective_date": entity.get("effective_date", ""),
+                    "status": entity.get("status", "有效"),
                 })
 
         return hits
