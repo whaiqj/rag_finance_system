@@ -210,12 +210,12 @@ class VectorStore:
         return round(max(0.0, min(1.0, 1.0 - raw_score / 2.0)), 4)
 
     @staticmethod
-    def _retry_operation(op, *args, max_retries: int = 5, operation_name: str = ""):
+    def _retry_operation(op, *args, max_retries: int = 5, operation_name: str = "", **kwargs):
         """带退避的重试，处理 milvus-lite 在 Windows 下的文件锁冲突。"""
         last_exc = None
         for attempt in range(1, max_retries + 1):
             try:
-                return op(*args)
+                return op(*args, **kwargs)
             except Exception as e:
                 last_exc = e
                 if attempt < max_retries:
