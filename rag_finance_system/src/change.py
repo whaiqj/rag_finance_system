@@ -1,4 +1,5 @@
 import os
+
 from docx import Document
 
 base_dir = os.path.dirname(__file__)

@@ -7,8 +7,8 @@ import os
 from typing import Optional
 
 import torch
-from loguru import logger
 from dotenv import load_dotenv
+from loguru import logger
 
 load_dotenv()
 
@@ -38,7 +38,7 @@ class QueryRewriter:
         device: Optional[str] = None,
         load_in_4bit: bool = False,
     ):
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"加载查询重写模型: {model_path}，设备: {self.device}")

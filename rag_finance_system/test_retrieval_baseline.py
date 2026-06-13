@@ -4,20 +4,22 @@ test_retrieval_baseline.py
 用法: py -3 rag_finance_system/test_retrieval_baseline.py [--file <txt_path>] [--keep-collection]
 """
 
+import argparse
 import os
 import sys
-import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from loguru import logger
-from rag_finance_system.src.document_processor import DocumentProcessor
-from rag_finance_system.src.embedder import Embedder
-from rag_finance_system.src.vector_store import VectorStore
+from loguru import logger  # noqa: E402
+
+from rag_finance_system.src.document_processor import DocumentProcessor  # noqa: E402
+from rag_finance_system.src.embedder import Embedder  # noqa: E402
+from rag_finance_system.src.vector_store import VectorStore  # noqa: E402
 
 BASELINE_COLLECTION = "baseline_test"
 

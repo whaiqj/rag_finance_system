@@ -1,0 +1,373 @@
+{
+	"info": {
+		"_postman_id": "rag-finance-api-v1",
+		"name": "RAG 金融法规智能问答系统",
+		"description": "基于 RAG 的金融法规智能问答系统 API 接口集合\n\n启动服务: py -3 -m uvicorn rag_finance_system.api_app:app --host 0.0.0.0 --port 8000\nBase URL: http://localhost:8000",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8000",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "文档管理",
+			"description": "文件上传、建索引、法规列表",
+			"item": [
+				{
+					"name": "上传文档",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": [],
+									"description": "支持 .pdf / .txt / .png / .jpg / .jpeg / .bmp / .tiff / .webp"
+								},
+								{
+									"key": "doc_type",
+									"value": "law",
+									"type": "text",
+									"description": "文档类型: law | case | other"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/documents/upload",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "documents", "upload"]
+						},
+						"description": "上传文档文件到服务器 (PDF/TXT/图片)，返回保存路径和元信息"
+					},
+					"response": [
+						{
+							"name": "上传成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"filename\": \"公司法.pdf\",\n  \"file_path\": \"data/raw/law/公司法.pdf\",\n  \"doc_type\": \"law\",\n  \"size_bytes\": 204800\n}"
+						}
+					]
+				},
+				{
+					"name": "建索引",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"file_path\": \"data/raw/law/公司法.pdf\",\n  \"doc_type\": \"law\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/documents/index",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "documents", "index"]
+						},
+						"description": "解析已上传文档，分段后写入 Milvus 向量库 + BM25 关键词索引"
+					},
+					"response": [
+						{
+							"name": "索引成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"chunk_count\": 56,\n  \"doc_type\": \"law\",\n  \"file_path\": \"data/raw/law/公司法.pdf\"\n}"
+						}
+					]
+				},
+				{
+					"name": "获取法规列表",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/laws",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "laws"]
+						},
+						"description": "返回所有已索引法规名称列表，用于下拉框填充"
+					},
+					"response": [
+						{
+							"name": "成功",
+							"status": "OK",
+							"code": 200,
+							"body": "[\n  \"中华人民共和国公司法\",\n  \"中华人民共和国证券法\",\n  \"中华人民共和国商业银行法\"\n]"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "检索与问答",
+			"description": "混合检索、智能问答、流式问答",
+			"item": [
+				{
+					"name": "混合检索",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"query\": \"股东责任是什么\",\n  \"top_k\": 10,\n  \"doc_type_filter\": null,\n  \"law_name_filter\": null,\n  \"authority_filter\": null,\n  \"status_filter\": \"有效\",\n  \"use_reranker\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/search",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "search"]
+						},
+						"description": "向量 + BM25 双路召回 + RRF 融合 + Reranker 精排\n\n可选过滤:\n- doc_type_filter: law | case | other\n- law_name_filter: 法规名称模糊匹配\n- authority_filter: 发文机关\n- status_filter: 有效 | 已修订 | 废止 (默认\"有效\"，传 null 查全部)\n- use_reranker: true/false"
+					},
+					"response": [
+						{
+							"name": "检索成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"query\": \"股东责任是什么\",\n  \"results\": [\n    {\n      \"text\": \"公司股东应当遵守法律、行政法规和公司章程...\",\n      \"source\": \"中华人民共和国公司法.pdf\",\n      \"article_num\": \"20\",\n      \"score\": 0.95,\n      \"law_name\": \"中华人民共和国公司法\",\n      \"doc_type\": \"law\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "智能问答",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"question\": \"股东责任是什么？\",\n  \"doc_type_filter\": null,\n  \"use_reranker\": true,\n  \"use_query_rewrite\": true,\n  \"max_new_tokens\": 1024,\n  \"include_historical\": false\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/qa",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "qa"]
+						},
+						"description": "完整 RAG 问答：词典实体检测 → 查询扩展 → 查询重写 → 混合检索 → LLM 生成 → 溯源 + 可信度评分\n\n参数:\n- use_query_rewrite: 是否启用查询重写 (Qwen2.5-0.5B)\n- max_new_tokens: 最大生成长度 (64-4096)\n- include_historical: 是否包含历史版本 (已修订/废止)"
+					},
+					"response": [
+						{
+							"name": "问答成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"question\": \"股东责任是什么？\",\n  \"answer\": \"根据《中华人民共和国公司法》第二十条...\",\n  \"rewritten_query\": \"股东的法律责任和义务\",\n  \"sources\": [\n    {\n      \"source\": \"中华人民共和国公司法.pdf\",\n      \"article_num\": \"20\",\n      \"text\": \"公司股东应当遵守...\",\n      \"score\": 0.95\n    }\n  ],\n  \"confidence\": {\n    \"total\": 0.96,\n    \"retrieval\": 0.95,\n    \"coverage\": 0.92\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "流式问答 (SSE)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"question\": \"股东责任是什么？\",\n  \"use_reranker\": true,\n  \"use_query_rewrite\": false,\n  \"max_new_tokens\": 1024,\n  \"include_historical\": false\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/qa/stream",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "qa", "stream"]
+						},
+						"description": "SSE 流式问答，逐 token 推送生成内容。事件类型:\n- delta: 增量文本\n- sources: 溯源信息 (JSON)\n- confidence: 可信度评分 (JSON)\n- done: 完成信号\n- error: 错误信息\n\n注意: 流式模式下不支持查询重写 (避免首字延迟过长)"
+					},
+					"response": [
+						{
+							"name": "SSE 流式响应",
+							"status": "OK",
+							"code": 200,
+							"body": "event: delta\ndata: 根据\n\nevent: delta\ndata: 《中华人民共和国\n\nevent: delta\ndata: 公司法》\n\nevent: sources\ndata: [...]\n\nevent: confidence\ndata: {\"total\":0.96,\"retrieval\":0.95,\"coverage\":0.92}\n\nevent: done\ndata: [DONE]"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "条文关联查询",
+			"description": "基于 Neo4j 知识图谱的法规条文关联关系查询",
+			"item": [
+				{
+					"name": "查询条文关联关系",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"law_name\": \"中华人民共和国公司法\",\n  \"article_num\": \"16\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/articles/relations",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "articles", "relations"]
+						},
+						"description": "查询指定法条的完整关联图谱:\n- target: 目标条文内容\n- incoming_refs: 引用本条文的其他条文\n- outgoing_refs: 本条文引用的其他条文\n- parent_document: 所属法规文档\n- related_documents: 关联法规 (RELATES_TO 边)\n- related_articles: 关联条文样本"
+					},
+					"response": [
+						{
+							"name": "查询成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"target\": {\n    \"text\": \"公司向其他企业投资或者为他人提供担保...\",\n    \"chunk_id\": \"公司法_16\",\n    \"law_name\": \"中华人民共和国公司法\",\n    \"article_num\": \"16\",\n    \"source\": \"中华人民共和国公司法.pdf\"\n  },\n  \"incoming_refs\": [\n    {\n      \"text\": \"...\",\n      \"chunk_id\": \"...\",\n      \"law_name\": \"中华人民共和国证券法\",\n      \"article_num\": \"...\",\n      \"source\": \"...\",\n      \"target_law\": \"中华人民共和国公司法\",\n      \"target_article\": \"16\"\n    }\n  ],\n  \"outgoing_refs\": [],\n  \"parent_document\": {\n    \"name\": \"中华人民共和国公司法\",\n    \"doc_type\": \"law\",\n    \"source\": \"中华人民共和国公司法.pdf\"\n  },\n  \"related_documents\": [],\n  \"related_articles\": []\n}"
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "标签分类管理",
+			"description": "金融词典条目的分类标签 CRUD",
+			"item": [
+				{
+					"name": "获取全部分类",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/categories",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "categories"]
+						},
+						"description": "返回按类型分组的分类名: { term: [...], law: [...], authority: [...] }"
+					},
+					"response": [
+						{
+							"name": "成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"categories\": {\n    \"term\": [\"银行监管\", \"证券监管\", \"保险监管\"],\n    \"law\": [\"银行法\", \"证券法\"],\n    \"authority\": [\"中央银行\", \"监管机构\"]\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "重命名分类",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"old_name\": \"银行监管\",\n  \"new_name\": \"银行业监管\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/categories/rename",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "categories", "rename"]
+						},
+						"description": "重命名分类名称，自动更新该分类下所有条目"
+					},
+					"response": [
+						{
+							"name": "成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"old_name\": \"银行监管\",\n  \"new_name\": \"银行业监管\",\n  \"affected\": {\n    \"term\": 12,\n    \"law\": 3,\n    \"authority\": 1\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "删除分类",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/categories/银行监管",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "categories", "银行监管"]
+						},
+						"description": "删除分类（清空该分类下所有条目的类别字段，不删除条目本身）"
+					},
+					"response": [
+						{
+							"name": "成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"deleted\": \"银行监管\",\n  \"affected\": {\n    \"term\": 12,\n    \"law\": 0,\n    \"authority\": 0\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "获取词典条目列表",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/dictionary/term",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "dictionary", "term"]
+						},
+						"description": "按类型获取所有词典条目及分类。item_type: term | law | authority"
+					},
+					"response": [
+						{
+							"name": "成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"items\": [\n    { \"name\": \"不良贷款率\", \"category\": \"银行监管\" },\n    { \"name\": \"资本充足率\", \"category\": \"银行监管\" }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "设置条目分类",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"item_type\": \"term\",\n  \"item_name\": \"资本充足率\",\n  \"category\": \"银行业监管\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/dictionary/资本充足率/category",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "dictionary", "资本充足率", "category"]
+						},
+						"description": "为指定词典条目设置分类标签"
+					},
+					"response": [
+						{
+							"name": "成功",
+							"status": "OK",
+							"code": 200,
+							"body": "{\n  \"item_name\": \"资本充足率\",\n  \"category\": \"银行业监管\"\n}"
+						}
+					]
+				}
+			]
+		}
+	]
+}

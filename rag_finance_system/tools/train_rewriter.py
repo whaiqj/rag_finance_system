@@ -5,17 +5,18 @@ LoRA 微调查询重写小模型（Qwen2.5-0.5B-Instruct）。
 输出：checkpoints/rewriter_lora/
 """
 import json
-import torch
 from pathlib import Path
+
+import torch
 from datasets import Dataset
+from peft import LoraConfig, TaskType, get_peft_model
 from transformers import (
-    AutoTokenizer,
     AutoModelForCausalLM,
-    TrainingArguments,
-    Trainer,
+    AutoTokenizer,
     DataCollatorForSeq2Seq,
+    Trainer,
+    TrainingArguments,
 )
-from peft import LoraConfig, get_peft_model, TaskType
 
 # ===== 配置 =====
 BASE_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -167,7 +168,6 @@ def main():
 
     # 验证：测试一条
     print("\n===== 验证 =====")
-    from peft import PeftModel
     test = "公司破产了股东要承担什么法律责任"
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},

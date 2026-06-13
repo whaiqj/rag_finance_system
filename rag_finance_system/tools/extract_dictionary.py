@@ -15,9 +15,7 @@ extract_dictionary.py
 """
 
 import json
-import os
 import re
-import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -297,7 +295,7 @@ FINANCE_PREFIXES = [
 STOP_TERMS = {
     "规定", "应当", "不得", "可以", "本法", "法律", "行政法规",
     "有关部门", "以上", "以下", "其他", "或者", "并且",
-    "及其", "之日起", "之日起", "包括", "属于", "用于",
+    "及其", "之日起", "包括", "属于", "用于",
     "进行", "提供", "实施", "按照", "根据", "执行",
     "负责", "制定", "建立", "完善", "加强", "促进",
     "发展", "工作", "活动", "经营", "服务", "业务",
@@ -308,8 +306,7 @@ STOP_TERMS = {
     "一年", "二年", "三年", "五年", "十日", "三十日",
     "一条", "二条", "三条", "四条", "五条",
     "第一款", "第二款", "第三款", "第一项", "第二项",
-    "之一", "之二", "之一",
-    "限期", "改正", "责令", "罚款", "处分",
+    "之一", "之二", "限期", "改正", "责令", "罚款", "处分",
     "申请", "批准", "同意", "备案", "报告",
     "人民", "举报", "检举", "控告", "投诉",
 }
@@ -505,14 +502,8 @@ def main():
             "new_terms": len(new_terms),
         },
         "new_laws": new_laws,
-        "new_authorities": {
-            name: info for name, info in
-            sorted(new_auths.items(), key=lambda x: -x[1]["frequency"])
-        },
-        "new_terms": {
-            term: info for term, info in
-            sorted(new_terms.items(), key=lambda x: -x[1]["tfidf_weight"])
-        },
+        "new_authorities": dict(sorted(new_auths.items(), key=lambda x: -x[1]["frequency"])),
+        "new_terms": dict(sorted(new_terms.items(), key=lambda x: -x[1]["tfidf_weight"])),
     }
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -524,7 +515,7 @@ def main():
     print(f"  新法规名: {len(new_laws)} 部")
     print(f"  新机构名: {len(new_auths)} 个")
     print(f"  新术语:   {len(new_terms)} 个")
-    print(f"\n请人工审核候选文件，确认后合并到词典。")
+    print("\n请人工审核候选文件，确认后合并到词典。")
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
 from loguru import logger
 
 
@@ -27,6 +28,7 @@ class FinanceDictionary:
                 "FINANCE_DICT_PATH",
                 str(Path(__file__).resolve().parent.parent.parent / "data" / "finance_dictionary.json"),
             )
+        self._dict_path = dict_path
 
         with open(dict_path, "r", encoding="utf-8") as f:
             self._raw = json.load(f)
@@ -288,6 +290,116 @@ class FinanceDictionary:
             if full:
                 result["authority"] = full.split(",")
         return result
+
+    # ── 分类管理 ──
+
+    def _save(self):
+        """将当前词典数据写回 JSON 文件。"""
+        with open(self._dict_path, "w", encoding="utf-8") as f:
+            json.dump(self._raw, f, ensure_ascii=False, indent=2)
+        logger.info(f"词典已保存: {self._dict_path}")
+
+    def list_categories(self) -> Dict[str, List[str]]:
+        """列出所有唯一分类名，按类型分组。"""
+        cats: Dict[str, set] = {"term": set(), "law": set(), "authority": set()}
+        for info in self._raw.get("terms", {}).values():
+            c = info.get("category", "")
+            if c:
+                cats["term"].add(c)
+        for info in self._raw.get("law_names", {}).values():
+            c = info.get("category", "")
+            if c:
+                cats["law"].add(c)
+        for info in self._raw.get("authorities", {}).values():
+            c = info.get("category", "")
+            if c:
+                cats["authority"].add(c)
+        return {k: sorted(v) for k, v in cats.items()}
+
+    def rename_category(self, old_name: str, new_name: str) -> Dict[str, int]:
+        """重命名分类，返回各类型受影响的条目数。"""
+        counts: Dict[str, int] = {"term": 0, "law": 0, "authority": 0}
+        for info in self._raw.get("terms", {}).values():
+            if info.get("category") == old_name:
+                info["category"] = new_name
+                counts["term"] += 1
+        for info in self._raw.get("law_names", {}).values():
+            if info.get("category") == old_name:
+                info["category"] = new_name
+                counts["law"] += 1
+        for info in self._raw.get("authorities", {}).values():
+            if info.get("category") == old_name:
+                info["category"] = new_name
+                counts["authority"] += 1
+        if any(counts.values()):
+            self._save()
+            self._reload_indexes()
+        return counts
+
+    def delete_category(self, name: str) -> Dict[str, int]:
+        """删除分类名（将受影响的条目 category 置空）。"""
+        counts: Dict[str, int] = {"term": 0, "law": 0, "authority": 0}
+        for info in self._raw.get("terms", {}).values():
+            if info.get("category") == name:
+                info["category"] = ""
+                counts["term"] += 1
+        for info in self._raw.get("law_names", {}).values():
+            if info.get("category") == name:
+                info["category"] = ""
+                counts["law"] += 1
+        for info in self._raw.get("authorities", {}).values():
+            if info.get("category") == name:
+                info["category"] = ""
+                counts["authority"] += 1
+        if any(counts.values()):
+            self._save()
+            self._reload_indexes()
+        return counts
+
+    def _reload_indexes(self):
+        """重载反向索引以同步 category 变更。"""
+        self._term_category.clear()
+        for term_name, info in self._raw.get("terms", {}).items():
+            self._term_category[term_name] = info.get("category", "")
+        for full_name, info in self._raw.get("law_names", {}).items():
+            self._law_full_info[full_name] = info
+
+    def list_items_by_category(self, item_type: str, category: str) -> List[Dict]:
+        """列出指定分类下的所有条目。item_type: term/law/authority。"""
+        results = []
+        key_map = {"term": "terms", "law": "law_names", "authority": "authorities"}
+        key = key_map.get(item_type)
+        if key is None:
+            return results
+        for name, info in self._raw.get(key, {}).items():
+            if info.get("category") == category:
+                results.append({"name": name, **info})
+        return results
+
+    def list_all_items(self, item_type: str) -> List[Dict]:
+        """列出指定类型的所有条目及其分类。item_type: term/law/authority。"""
+        results = []
+        key_map = {"term": "terms", "law": "law_names", "authority": "authorities"}
+        key = key_map.get(item_type)
+        if key is None:
+            return results
+        for name, info in self._raw.get(key, {}).items():
+            results.append({"name": name, **info})
+        results.sort(key=lambda x: x.get("category", ""))
+        return results
+
+    def set_item_category(self, item_type: str, item_name: str, category: str) -> bool:
+        """设置单个条目的分类。返回是否成功。"""
+        key_map = {"term": "terms", "law": "law_names", "authority": "authorities"}
+        key = key_map.get(item_type)
+        if key is None:
+            return False
+        if item_name not in self._raw.get(key, {}):
+            return False
+        self._raw[key][item_name]["category"] = category
+        self._save()
+        self._reload_indexes()
+        return True
 
     # ── 统计 ──
 

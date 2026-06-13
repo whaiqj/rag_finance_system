@@ -5,7 +5,7 @@ BM25 评分由 ES match 查询原生提供，支持 IK 中文分词。
 """
 import os
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from loguru import logger

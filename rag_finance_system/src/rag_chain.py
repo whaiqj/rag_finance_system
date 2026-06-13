@@ -3,12 +3,13 @@ rag_chain.py
 RAG主链路：检索 → Prompt组装 → LLM生成 → 答案+溯源
 """
 
-import re
+import json
 import os
+import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from loguru import logger
+from typing import Any, Dict, Iterator, List, Optional
 
+from loguru import logger
 
 # ========================
 # 法律名称识别
@@ -457,17 +458,15 @@ class RAGChain:
         doc_type_filter: Optional[str] = None,
         max_new_tokens: int = 1024,
         include_historical: bool = False,
-    ):
-        """流式问答：检索后逐 token 生成，同时收集完整回答用于溯源。
-
-        Yields:
-            每行 JSON: {"type": "token"|"meta"|"done", ...}
+    ) -> Iterator[str]:
         """
-        import json as _json
-
-        # 0-3: 检索（与 query() 相同）
+        流式问答：检索部分与 query() 相同，LLM 生成用 generate_stream 逐 token yield。
+        Yields JSON lines: {"type": "token", "content": "..."}
+                          {"type": "done", "sources": [...], "confidence": {...}, "rewritten_query": "..."}
+        """
         logger.info(f"流式问答请求: {question[:60]}...")
 
+        # 0. 词典实体检测 + 查询扩展（与 query() 相同）
         law_name_filter = None
         authority_filter = None
         expanded_query = question
@@ -505,52 +504,73 @@ class RAGChain:
                 graph_articles = self.kg.get_related_articles(
                     law_names=[law_name_filter] if law_name_filter else None,
                     terms=entities.get("terms") if self.dictionary else None,
-                    authorities=authority_list, max_results=5,
+                    authorities=authority_list,
+                    max_results=5,
                 )
                 graph_facts = self.kg.get_graph_facts(
                     law_names=[law_name_filter] if law_name_filter else None,
                     terms=entities.get("terms") if self.dictionary else None,
-                    authorities=authority_list, max_results=6,
+                    authorities=authority_list,
+                    max_results=6,
                 )
             except Exception as e:
                 logger.warning(f"图谱扩展失败: {e}")
 
+        # 检索
         status_filter = None if include_historical else "有效"
         chunks = self.retriever.retrieve(
-            query=rewritten_query, top_k=top_k, use_reranker=use_reranker,
-            source_filter=source_filter, doc_type_filter=doc_type_filter,
-            law_name_filter=law_name_filter, authority_filter=authority_filter,
+            query=rewritten_query,
+            top_k=top_k,
+            use_reranker=use_reranker,
+            source_filter=source_filter,
+            doc_type_filter=doc_type_filter,
+            law_name_filter=law_name_filter,
+            authority_filter=authority_filter,
             status_filter=status_filter,
         )
 
-        # 图谱条文补充到上下文
-        if graph_articles:
-            for ga in graph_articles:
-                chunks.append({"text": ga.get("text", ""), "source": ga.get("source", "图谱关联"),
-                               "article_num": ga.get("article_num", ""), "score": 0.5})
+        seen_chunk_ids = {c.get("chunk_id", "") for c in chunks}
+        for ga in graph_articles:
+            gid = ga.get("chunk_id", "")
+            if gid and gid not in seen_chunk_ids:
+                seen_chunk_ids.add(gid)
+                chunks.append({
+                    "text": ga.get("text", ""),
+                    "source": ga.get("source", ""),
+                    "article_num": ga.get("article_num", ""),
+                    "doc_type": "law",
+                    "law_name": ga.get("law_name", ""),
+                    "score": 0.0,
+                    "_graph_relation": ga.get("relation", ""),
+                })
 
-        messages = build_prompt(expanded_query, chunks, graph_facts=graph_facts)
+        # 构建 Prompt
+        messages = build_prompt(question, chunks, graph_facts=graph_facts)
 
-        # 发送元信息（重写查询 + sources）
-        sources_preview = [
-            {"source": c.get("source", ""), "article_num": c.get("article_num", ""),
-             "text": c.get("text", "")[:200], "score": round(c.get("score", 0.0), 4)}
-            for c in chunks[:self.retriever.reranker_top_n]
+        # 流式 LLM 生成
+        full_answer: list[str] = []
+        for token in self.llm.generate_stream(messages, max_new_tokens=max_new_tokens):
+            full_answer.append(token)
+            yield json.dumps({"type": "token", "content": token}, ensure_ascii=False)
+
+        answer = "".join(full_answer)
+        logger.info(f"流式生成完成: {len(answer)} 字符")
+
+        # 溯源 + 可信度
+        sources = [
+            {
+                "source": c.get("source", ""),
+                "article_num": c.get("article_num", ""),
+                "text": c.get("text", "")[:300],
+                "score": round(c.get("reranker_score", c.get("score", 0.0)), 4),
+            }
+            for c in chunks
         ]
-        yield _json.dumps({"type": "meta", "rewritten_query": rewritten_query,
-                           "sources": sources_preview}, ensure_ascii=False) + "\n"
+        confidence = self.retriever.compute_confidence(question, answer, chunks)
 
-        # 流式生成
-        full_answer = ""
-        try:
-            for token in self.llm.generate_stream(messages, max_new_tokens=max_new_tokens):
-                full_answer += token
-                yield _json.dumps({"type": "token", "text": token}, ensure_ascii=False) + "\n"
-        except AttributeError:
-            # 回退：LLM 不支持流式 → 一次性生成
-            full_answer = self.llm.generate(messages, max_new_tokens=max_new_tokens)
-            yield _json.dumps({"type": "token", "text": full_answer}, ensure_ascii=False) + "\n"
-
-        # 可信度
-        confidence = self.retriever.compute_confidence(question, full_answer, chunks)
-        yield _json.dumps({"type": "done", "confidence": confidence}, ensure_ascii=False) + "\n"
+        yield json.dumps({
+            "type": "done",
+            "sources": sources,
+            "confidence": confidence,
+            "rewritten_query": rewritten_query,
+        }, ensure_ascii=False)

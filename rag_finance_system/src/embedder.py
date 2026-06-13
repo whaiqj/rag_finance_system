@@ -6,10 +6,10 @@ Embedding模型封装（bge-small-zh-v1.5）
 
 import os
 from typing import List, Union
-import torch.nn.functional as F
+
 import torch
-from loguru import logger
 from dotenv import load_dotenv
+from loguru import logger
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 load_dotenv()
@@ -135,7 +135,7 @@ class Reranker:
 
         results = [
             {"index": idx, "score": score}
-            for idx, score in zip(all_indices, all_scores)
+            for idx, score in zip(all_indices, all_scores, strict=True)
         ]
         results = sorted(results, key=lambda x: x["score"], reverse=True)
 

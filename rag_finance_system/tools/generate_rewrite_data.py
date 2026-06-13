@@ -186,7 +186,7 @@ def forward_generate(args):
 
             # 写入 JSONL
             with out_path.open("a", encoding="utf-8") as f:
-                for question, query in zip(batch, rewritten):
+                for question, query in zip(batch, rewritten, strict=False):
                     obj = {"question": question, "query": query}
                     f.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
@@ -195,7 +195,7 @@ def forward_generate(args):
 
         except Exception as e:
             logger.error(f"第 {i+1}-{i+len(batch)} 条失败: {e}")
-            logger.info(f"可重新运行并加 --resume 继续")
+            logger.info("可重新运行并加 --resume 继续")
             break
 
         time.sleep(0.3)  # 降低 API 速率压力
@@ -280,7 +280,7 @@ def reverse_generate(args):
 
         except Exception as e:
             logger.error(f"第 {i+1}-{i+len(batch)} 条失败: {e}")
-            logger.info(f"可重新运行并加 --resume 继续")
+            logger.info("可重新运行并加 --resume 继续")
             break
 
         time.sleep(0.5)

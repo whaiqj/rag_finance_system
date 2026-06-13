@@ -3,8 +3,9 @@
 将重写后的 query 添加到每条记录中，格式为 {"question": "...", "query": "..."}
 """
 
-import os
 import json
+import os
+
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -127,7 +128,7 @@ def main():
 
     # 组装输出，query 放在 question 后面
     output = []
-    for item, rewrite in zip(data, all_rewrites):
+    for item, rewrite in zip(data, all_rewrites, strict=False):
         output.append({
             "question": item["question"],
             "query": rewrite,

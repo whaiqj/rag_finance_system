@@ -5,10 +5,10 @@ LLM推理模块
 """
 
 import os
-from typing import List, Optional, Generator
+from typing import Iterator, List
 
-from loguru import logger
 from dotenv import load_dotenv
+from loguru import logger
 
 load_dotenv()
 
@@ -31,7 +31,7 @@ class LocalLLM:
 
     def __init__(self, model_path: str = LLM_MODEL_PATH):
         import torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"加载本地LLM: {model_path}，设备: {self.device}")
@@ -48,26 +48,38 @@ class LocalLLM:
         self.model.eval()
         logger.info("本地LLM加载完成")
 
-    def _prepare_inputs(self, messages: List[dict]):
-        import torch
-        text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
-        return self.tokenizer([text], return_tensors="pt").to(self.device)
-
     def generate(
         self,
         messages: List[dict],
         max_new_tokens: int = 1024,
         temperature: float = 0.1,
     ) -> str:
+        """
+        生成回答
+        Args:
+            messages: [{"role": "system/user/assistant", "content": str}]
+            max_new_tokens: 最大生成token数
+            temperature: 温度（金融场景用低温，减少幻觉）
+        """
         import torch
-        inputs = self._prepare_inputs(messages)
+
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
+
         with torch.no_grad():
             output_ids = self.model.generate(
-                **inputs, max_new_tokens=max_new_tokens, temperature=temperature,
-                do_sample=temperature > 0, repetition_penalty=1.1,
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                do_sample=temperature > 0,
+                repetition_penalty=1.1,
             )
+
+        # 只取新生成的部分
         generated = output_ids[0][inputs.input_ids.shape[1]:]
         return self.tokenizer.decode(generated, skip_special_tokens=True)
 
@@ -76,17 +88,26 @@ class LocalLLM:
         messages: List[dict],
         max_new_tokens: int = 1024,
         temperature: float = 0.1,
-    ):
-        """流式生成，yield 每个新 token 的文本增量。"""
-        import torch
-        from transformers import TextStreamer, TextIteratorStreamer
+    ) -> Iterator[str]:
+        """流式生成回答，逐 token yield。"""
         from threading import Thread
 
-        inputs = self._prepare_inputs(messages)
-        streamer = TextIteratorStreamer(
-            self.tokenizer, skip_prompt=True, skip_special_tokens=True,
+        from transformers import TextIteratorStreamer
+
+        text = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
         )
-        gen_kwargs = dict(
+        inputs = self.tokenizer([text], return_tensors="pt").to(self.device)
+
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
+        )
+
+        generation_kwargs = dict(
             **inputs,
             max_new_tokens=max_new_tokens,
             temperature=temperature,
@@ -94,9 +115,14 @@ class LocalLLM:
             repetition_penalty=1.1,
             streamer=streamer,
         )
-        thread = Thread(target=self.model.generate, kwargs=gen_kwargs)
+
+        thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
         thread.start()
-        yield from streamer
+
+        for token_text in streamer:
+            yield token_text
+
+        thread.join()
 
 
 # ========================
@@ -136,6 +162,31 @@ class QwenAPILLM:
         )
         return response.choices[0].message.content
 
+    def generate_stream(
+        self,
+        messages: List[dict],
+        max_new_tokens: int = 1024,
+        temperature: float = 0.1,
+    ) -> Iterator[str]:
+        """通义千问 API 流式生成。"""
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=self.api_key,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            stream=True,
+        )
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
+
 
 class DeepseekAPILLM:
     """
@@ -169,6 +220,31 @@ class DeepseekAPILLM:
             temperature=temperature,
         )
         return response.choices[0].message.content
+
+    def generate_stream(
+        self,
+        messages: List[dict],
+        max_new_tokens: int = 1024,
+        temperature: float = 0.1,
+    ) -> Iterator[str]:
+        """Deepseek API 流式生成。"""
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            stream=True,
+        )
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
 
 
 # ========================

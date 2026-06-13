@@ -4,11 +4,10 @@ convert_testfiles.py
 优先读取 SOFFICE_PATH，未设置时自动从 PATH 或常见安装位置查找 soffice。
 """
 import os
-import subprocess
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
-
 
 BASE = Path(__file__).resolve().parent.parent.parent / "data" / "testfiles"
 SOFFICE_CANDIDATES = [

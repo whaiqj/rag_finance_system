@@ -5,10 +5,9 @@ BM25 关键词检索索引（内存实现 + jieba 中文分词）
 """
 
 import math
-import os
 import pickle
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import jieba
 from loguru import logger

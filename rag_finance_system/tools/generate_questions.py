@@ -3,9 +3,10 @@
 保存到 questions.json 文件中，格式为 {"question": "问题内容"}。
 """
 
-import os
-import json
 import glob
+import json
+import os
+
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -137,7 +138,7 @@ def main():
                 print(f"  调用失败: {e}，重试 {retry}/3")
 
         if retry == 3:
-            print(f"  批次失败，已跳过")
+            print("  批次失败，已跳过")
 
     # 去重
     seen = set()

@@ -9,8 +9,8 @@ merge_dictionary.py
 
 import json
 import sys
-from pathlib import Path
 from copy import deepcopy
+from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DICT_PATH = PROJECT_ROOT / "data" / "finance_dictionary.json"
@@ -283,14 +283,14 @@ def main():
         print(f"\n词典已更新: {DICT_PATH}")
 
     print(f"\n{'='*60}")
-    print(f"合并统计:")
+    print("合并统计:")
     print(f"  新增法规名: {stats['laws_added']} 部")
     print(f"  新增机构名: {stats['authorities_added']} 个")
     print(f"  新增术语:   {stats['terms_added']} 个")
     print(f"  跳过法规名: {len(skipped_laws)} 部 (非金融领域)")
     print(f"  跳过机构名: {len(skipped_auths)} 个 (泛称/短语)")
     print(f"  跳过术语:   {len(skipped_terms)} 个 (过于通用)")
-    print(f"\n词典总计:")
+    print("\n词典总计:")
     print(f"  术语: {len(merged.get('terms', {}))} 条")
     print(f"  法规名: {len(merged.get('law_names', {}))} 条")
     print(f"  机构: {len(merged.get('authorities', {}))} 个")

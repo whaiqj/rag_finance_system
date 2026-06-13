@@ -25,6 +25,9 @@ OCR_LANG = os.getenv("OCR_LANG", "ch")
 OCR_MIN_TEXT_CHARS = int(os.getenv("OCR_MIN_TEXT_CHARS", 80))
 OCR_EMPTY_PAGE_RATIO = float(os.getenv("OCR_EMPTY_PAGE_RATIO", 0.5))
 OCR_RENDER_SCALE = float(os.getenv("OCR_RENDER_SCALE", 2.0))
+IMAGE_PREPROCESS = os.getenv("IMAGE_PREPROCESS", "auto").strip().lower()
+
+SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"}
 
 
 class RecursiveCharacterTextSplitter:
@@ -505,6 +508,107 @@ class DocumentProcessor:
             "extraction_method": "txt",
         }
 
+    def _resolve_image_ocr_backends(self) -> list[str]:
+        """图片 OCR 后端顺序：PaddleOCR 优先（中文识别更准），Docling 回退。"""
+        if self.ocr_backend == "none":
+            return []
+        if self.ocr_backend == "auto":
+            return ["paddleocr", "docling"]
+        if self.ocr_backend in {"paddleocr", "docling"}:
+            return [self.ocr_backend]
+        return []
+
+    def extract_text_from_image(self, image_path: str) -> dict[str, Any]:
+        """对独立图片文件执行 OCR 文字提取。"""
+        path = Path(image_path)
+        if not path.exists():
+            raise FileNotFoundError(f"图片文件不存在: {image_path}")
+        if path.suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
+            raise ValueError(f"不支持的图片类型: {path.suffix.lower()}，仅支持 {SUPPORTED_IMAGE_EXTENSIONS}")
+
+        backends = self._resolve_image_ocr_backends()
+        last_error = None
+
+        for backend in backends:
+            try:
+                if backend == "paddleocr":
+                    result = self._extract_image_with_paddleocr(image_path)
+                elif backend == "docling":
+                    result = self._extract_text_with_docling(image_path)
+                else:
+                    continue
+
+                if result["full_text"].strip():
+                    return result
+            except Exception as exc:
+                last_error = exc
+                logger.warning(f"图片OCR backend {backend} 失败: {exc}")
+
+        if last_error is not None:
+            logger.warning(f"全部图片OCR backend失败: {last_error}")
+
+        return {
+            "title": path.stem,
+            "file_path": str(path.resolve()),
+            "pages": [],
+            "full_text": "",
+            "extraction_method": "ocr_failed",
+        }
+
+    def _extract_image_with_paddleocr(self, image_path: str) -> dict[str, Any]:
+        ocr = self._get_paddle_ocr()
+        path = Path(image_path)
+
+        image = Image.open(image_path).convert("RGB")
+        image = self._preprocess_image(image)
+
+        text = self._ocr_image_with_paddle(ocr, image)
+        text = self._clean_text(text)
+
+        logger.info(f"PaddleOCR图片解析完成: {path.name}")
+        return {
+            "title": path.stem,
+            "file_path": str(path.resolve()),
+            "pages": [{"page_num": 1, "text": text}] if text else [],
+            "full_text": text,
+            "extraction_method": "paddleocr_image",
+        }
+
+    def _preprocess_image(self, image: Image.Image) -> Image.Image:
+        """可选预处理：低质量手机照片增强 OCR 效果。
+        由 IMAGE_PREPROCESS 环境变量控制: auto|always|never
+        auto 仅对低分辨率图片预处理。
+        """
+        if IMAGE_PREPROCESS == "never":
+            return image
+
+        should_preprocess = IMAGE_PREPROCESS == "always"
+        if IMAGE_PREPROCESS == "auto":
+            width, height = image.size
+            should_preprocess = width < 1500 or height < 1500
+
+        if not should_preprocess:
+            return image
+
+        # 小图放大
+        width, height = image.size
+        if width < 1000 or height < 1000:
+            scale = max(2.0, 1000 / min(width, height))
+            new_size = (int(width * scale), int(height * scale))
+            image = image.resize(new_size, Image.LANCZOS)
+
+        # 灰度化 + 对比度增强 + 锐化
+        from PIL import ImageEnhance
+        gray = image.convert("L")
+        gray = ImageEnhance.Contrast(gray).enhance(1.5)
+        gray = ImageEnhance.Sharpness(gray).enhance(1.2)
+
+        return gray.convert("RGB")
+
+    def process_image(self, image_path: str, doc_type: str = "law") -> list[dict[str, Any]]:
+        doc_info = self.extract_text_from_image(image_path)
+        return self.split_into_chunks(doc_info, doc_type=doc_type)
+
     def process_txt(self, txt_path: str, doc_type: str = "law") -> list[dict[str, Any]]:
         doc_info = self.extract_text_from_txt(txt_path)
         return self.split_into_chunks(doc_info, doc_type=doc_type)
@@ -515,13 +619,16 @@ class DocumentProcessor:
             return self.process_pdf(file_path, doc_type=doc_type)
         if suffix == ".txt":
             return self.process_txt(txt_path=file_path, doc_type=doc_type)
-        raise ValueError(f"不支持的文件类型: {suffix}，仅支持PDF和TXT")
+        if suffix in SUPPORTED_IMAGE_EXTENSIONS:
+            return self.process_image(image_path=file_path, doc_type=doc_type)
+        raise ValueError(f"不支持的文件类型: {suffix}，仅支持 PDF/TXT/图片")
 
     def process_directory(self, dir_path: str) -> list[dict[str, Any]]:
         all_chunks = []
         files = list(Path(dir_path).glob("**/*"))
-        supported_files = [f for f in files if f.suffix.lower() in {".pdf", ".txt"}]
-        logger.info(f"发现 {len(supported_files)} 个支持的文件（PDF/TXT）")
+        supported_extensions = {".pdf", ".txt"} | SUPPORTED_IMAGE_EXTENSIONS
+        supported_files = [f for f in files if f.suffix.lower() in supported_extensions]
+        logger.info(f"发现 {len(supported_files)} 个支持的文件（PDF/TXT/图片）")
         for file_path in supported_files:
             try:
                 chunks = self.process_file(str(file_path))

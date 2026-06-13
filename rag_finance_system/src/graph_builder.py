@@ -4,10 +4,9 @@ graph_builder.py
 不依赖 LLM，仅用正则 + 词典匹配。
 """
 import re
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List
 
 from loguru import logger
-
 
 # 匹配 "《XXX》第X条" 格式的引用
 _REF_PATTERN = re.compile(

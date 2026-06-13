@@ -5,22 +5,23 @@ test_pipeline.py
 用法：python test_pipeline.py --file data/raw/your_file.pdf --query "你的问题"
 """
 
-import sys
 import argparse
+import sys
 from pathlib import Path
 
 # 将项目根目录加入路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from rag_finance_system.src.document_processor import DocumentProcessor
-from rag_finance_system.src.embedder import Embedder, Reranker
-from rag_finance_system.src.vector_store import VectorStore
-from rag_finance_system.src.retriever import Retriever
-from rag_finance_system.src.llm import get_llm
-from rag_finance_system.src.rag_chain import RAGChain
+from loguru import logger
+
 from rag_finance_system.src.bm25_index import BM25Index
 from rag_finance_system.src.dictionary import FinanceDictionary
-from loguru import logger
+from rag_finance_system.src.document_processor import DocumentProcessor
+from rag_finance_system.src.embedder import Embedder, Reranker
+from rag_finance_system.src.llm import get_llm
+from rag_finance_system.src.rag_chain import RAGChain
+from rag_finance_system.src.retriever import Retriever
+from rag_finance_system.src.vector_store import VectorStore
 
 
 def build_index(file_path: str, embedder: Embedder, vector_store: VectorStore,
@@ -60,7 +61,7 @@ def build_index(file_path: str, embedder: Embedder, vector_store: VectorStore,
 
 def run_query(query: str, rag_chain: RAGChain):
     """执行问答并打印结果"""
-    logger.info(f"===== Step 4: 问答检索 =====")
+    logger.info("===== Step 4: 问答检索 =====")
     result = rag_chain.query(query)
 
     print("\n" + "=" * 60)

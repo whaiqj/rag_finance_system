@@ -4,7 +4,7 @@ Neo4j 知识图谱存储层 — 节点/边 CRUD + 图谱遍历查询。
 显式关系（正则提取），不依赖 LLM。
 """
 import os
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -448,6 +448,133 @@ class KnowledgeGraph:
             if existing is None or r.get("path_length", 99) < existing.get("path_length", 99):
                 deduped[key] = r
         return list(deduped.values())[:max_results]
+
+    def get_article_relations(
+        self,
+        law_name: str,
+        article_num: str,
+        max_related_articles: int = 5,
+    ) -> Dict[str, Any]:
+        """查询指定条文的关联关系。
+
+        返回目标条文、入向/出向引用、所属文档、关联法规及示例条文。
+        """
+        if not self._connected:
+            return {}
+
+        result: Dict[str, Any] = {
+            "target": None,
+            "incoming_refs": [],
+            "outgoing_refs": [],
+            "parent_document": None,
+            "related_documents": [],
+            "related_articles": [],
+        }
+
+        # 1. 查找目标条文
+        records = self._run(
+            """
+            MATCH (a:Article {law_name: $law_name, article_num: $article_num})
+            RETURN a.text AS text, a.chunk_id AS chunk_id,
+                   a.law_name AS law_name, a.article_num AS article_num, a.source AS source
+            ORDER BY a.chunk_id LIMIT 1
+            """,
+            {"law_name": law_name, "article_num": article_num},
+        )
+        if not records:
+            return result
+        result["target"] = records[0]
+
+        # 2. 入向引用：哪些条文引用了目标条文
+        incoming = self._run(
+            """
+            MATCH (target:Article {law_name: $law_name, article_num: $article_num})
+            MATCH (referrer:Article)-[r:REFERENCES]->(target)
+            RETURN referrer.text AS text, referrer.chunk_id AS chunk_id,
+                   referrer.law_name AS law_name, referrer.article_num AS article_num,
+                   referrer.source AS source
+            """,
+            {"law_name": law_name, "article_num": article_num},
+        )
+        result["incoming_refs"] = incoming
+
+        # 3. 出向引用：目标条文引用了哪些条文
+        outgoing = self._run(
+            """
+            MATCH (target:Article {law_name: $law_name, article_num: $article_num})
+            MATCH (target)-[r:REFERENCES]->(referenced:Article)
+            RETURN referenced.text AS text, referenced.chunk_id AS chunk_id,
+                   referenced.law_name AS law_name, referenced.article_num AS article_num,
+                   referenced.source AS source,
+                   r.target_law AS target_law, r.target_article AS target_article
+            """,
+            {"law_name": law_name, "article_num": article_num},
+        )
+        result["outgoing_refs"] = outgoing
+
+        # 4. 所属文档
+        parent = self._run(
+            """
+            MATCH (target:Article {law_name: $law_name, article_num: $article_num})
+            MATCH (target)-[:BELONGS_TO]->(doc:Document)
+            RETURN doc.name AS name, doc.doc_type AS doc_type, doc.source AS source
+            LIMIT 1
+            """,
+            {"law_name": law_name, "article_num": article_num},
+        )
+        if parent:
+            result["parent_document"] = parent[0]
+
+        # 5. 关联法规（双向 RELATES_TO）
+        related_docs = self._run(
+            """
+            MATCH (target:Article {law_name: $law_name, article_num: $article_num})
+            MATCH (target)-[:BELONGS_TO]->(doc:Document)
+            MATCH (doc)-[rel:RELATES_TO]->(related:Document)
+            RETURN related.name AS name, related.doc_type AS doc_type,
+                   rel.relation_type AS relation_type, 'outgoing' AS direction
+            UNION
+            MATCH (target:Article {law_name: $law_name, article_num: $article_num})
+            MATCH (target)-[:BELONGS_TO]->(doc:Document)
+            MATCH (related:Document)-[rel:RELATES_TO]->(doc)
+            RETURN related.name AS name, related.doc_type AS doc_type,
+                   rel.relation_type AS relation_type, 'incoming' AS direction
+            """,
+            {"law_name": law_name, "article_num": article_num},
+        )
+        result["related_documents"] = related_docs
+
+        # 6. 关联法规示例条文
+        related_articles = self._run(
+            """
+            MATCH (target:Article {law_name: $law_name, article_num: $article_num})
+            MATCH (target)-[:BELONGS_TO]->(doc:Document)
+            MATCH (doc)-[:RELATES_TO]-(related:Document)
+            MATCH (related)<-[:BELONGS_TO]-(sample:Article)
+            RETURN sample.text AS text, sample.chunk_id AS chunk_id,
+                   sample.law_name AS law_name, sample.article_num AS article_num,
+                   sample.source AS source
+            LIMIT $max_related
+            """,
+            {"law_name": law_name, "article_num": article_num, "max_related": max_related_articles},
+        )
+        result["related_articles"] = related_articles
+
+        return result
+
+    def get_distinct_law_names(self) -> List[str]:
+        """返回知识图谱中所有已索引的法规名称列表。"""
+        if not self._connected:
+            return []
+        records = self._run(
+            """
+            MATCH (a:Article)
+            WHERE a.law_name IS NOT NULL AND a.law_name <> ''
+            RETURN DISTINCT a.law_name AS law_name
+            ORDER BY a.law_name
+            """
+        )
+        return [r["law_name"] for r in records]
 
     def get_graph_facts(
         self,

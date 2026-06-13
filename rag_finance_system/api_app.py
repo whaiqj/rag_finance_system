@@ -4,32 +4,43 @@ FastAPI 应用 — 从 Streamlit app.py 平移核心逻辑到 REST API。
 启动: py -3 -m uvicorn rag_finance_system.api_app:app --host 0.0.0.0 --port 8000
 """
 
-import json
-import sys
 import os
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
-# api_app.py 在 rag_finance_system/ 下，同级 .env
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+load_dotenv()
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # noqa: E402
 
-from rag_finance_system.api_schemas import (
+from rag_finance_system.api_schemas import (  # noqa: E402
+    ArticleInfo,
+    ArticleRelationsRequest,
+    ArticleRelationsResponse,
+    CategoriesResponse,
+    CategoryAffectedCount,
+    CategoryDeleteResponse,
+    CategoryRenameRequest,
+    CategoryRenameResponse,
     ConfidenceScores,
+    DictionaryItem,
+    DictionaryItemList,
+    DocumentInfo,
     IndexRequest,
     IndexResponse,
     QARequest,
     QAResponse,
+    ReferenceInfo,
+    RelatedDocumentInfo,
     SearchRequest,
     SearchResponse,
     SearchResultItem,
+    SetCategoryRequest,
     SourceItem,
     UploadResponse,
 )
@@ -61,7 +72,9 @@ _graph_builder = None
 _term_index = None
 _term_index_path = str(Path(__file__).resolve().parent / "data" / "term_index.pkl")
 
-ALLOWED_EXTENSIONS = {".pdf", ".txt"}
+from rag_finance_system.src.document_processor import SUPPORTED_IMAGE_EXTENSIONS  # noqa: E402
+
+ALLOWED_EXTENSIONS = {".pdf", ".txt"} | SUPPORTED_IMAGE_EXTENSIONS
 
 
 def _get_embedder():
@@ -222,9 +235,9 @@ def _get_graph_builder():
 def _get_rag(use_api: bool = False):
     global _rag
     if _rag is None:
-        from rag_finance_system.src.retriever import Retriever
         from rag_finance_system.src.llm import get_llm
         from rag_finance_system.src.rag_chain import RAGChain
+        from rag_finance_system.src.retriever import Retriever
         from rag_finance_system.src.rewriter import QueryRewriter
 
         embedder = _get_embedder()
@@ -296,7 +309,7 @@ def upload_document(
 ):
     ext = Path(file.filename or "unknown").suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(400, f"不支持的文件类型: {ext}，仅支持 PDF/TXT")
+        raise HTTPException(400, f"不支持的文件类型: {ext}，仅支持 PDF/TXT/图片(PNG,JPG,BMP,TIFF,WEBP)")
 
     save_dir = Path("data/raw") / doc_type
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -306,7 +319,7 @@ def upload_document(
         content = file.file.read()
         save_path.write_bytes(content)
     except Exception as e:
-        raise HTTPException(500, f"文件保存失败: {e}")
+        raise HTTPException(500, f"文件保存失败: {e}") from e
 
     return UploadResponse(
         filename=file.filename,
@@ -331,7 +344,7 @@ def build_index(body: IndexRequest):
         processor = _get_processor()
         chunks = processor.process_file(file_path, doc_type=body.doc_type)
     except Exception as e:
-        raise HTTPException(500, f"文档解析失败: {e}")
+        raise HTTPException(500, f"文档解析失败: {e}") from e
 
     if not chunks:
         raise HTTPException(500, "解析结果为空")
@@ -353,13 +366,13 @@ def build_index(body: IndexRequest):
         texts = [c["text"] for c in chunks]
         embeddings = embedder.encode_documents(texts, batch_size=16)
     except Exception as e:
-        raise HTTPException(500, f"Embedding 失败: {e}")
+        raise HTTPException(500, f"Embedding 失败: {e}") from e
 
     try:
         vs = _get_vector_store()
         vs.insert(chunks, embeddings)
     except Exception as e:
-        raise HTTPException(500, f"Milvus 写入失败: {e}")
+        raise HTTPException(500, f"Milvus 写入失败: {e}") from e
 
     try:
         bm25 = _get_bm25()
@@ -431,7 +444,7 @@ def search(body: SearchRequest):
             status_filter=body.status_filter,
         )
     except Exception as e:
-        raise HTTPException(500, f"检索失败: {e}")
+        raise HTTPException(500, f"检索失败: {e}") from e
 
     results = [
         SearchResultItem(
@@ -466,7 +479,7 @@ def qa(body: QARequest):
             include_historical=body.include_historical,
         )
     except Exception as e:
-        raise HTTPException(500, f"问答失败: {e}")
+        raise HTTPException(500, f"问答失败: {e}") from e
 
     sources = [
         SourceItem(
@@ -494,32 +507,152 @@ def qa(body: QARequest):
     )
 
 
-# ── 5. 流式问答 ──
-
 @app.post("/api/qa/stream")
 def qa_stream(body: QARequest):
-    """流式 SSE 问答：检索后逐 token 推送，降低首字延迟。"""
+    """流式问答：SSE 逐 token 推送，最后推送 sources + confidence。"""
     if not _check_milvus():
         raise HTTPException(503, "Milvus 服务不可用")
 
-    def _generate():
+    try:
         rag = _get_rag()
+    except Exception as e:
+        raise HTTPException(500, f"初始化 RAG 链路失败: {e}") from e
+
+    def generate():
         try:
-            for line in rag.query_stream(
+            for json_line in rag.query_stream(
                 question=body.question,
                 use_reranker=body.use_reranker,
                 use_query_rewrite=body.use_query_rewrite,
                 doc_type_filter=body.doc_type_filter,
                 max_new_tokens=body.max_new_tokens,
+                include_historical=body.include_historical,
             ):
-                yield f"data: {line}\n\n"
+                yield f"data: {json_line}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
-            logger.error(f"流式问答失败: {e}")
-            yield f"data: {{\"type\": \"error\", \"message\": \"{str(e)}\"}}\n\n"
+            import json
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
-        _generate(),
+        generate(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
+
+
+# ── 5. 分类管理 ──
+
+@app.get("/api/categories", response_model=CategoriesResponse)
+def list_categories():
+    """列出所有唯一分类名，按类型分组（term/law/authority）。"""
+    d = _get_dictionary()
+    if d is None:
+        raise HTTPException(503, "词典服务不可用")
+    return CategoriesResponse(categories=d.list_categories())
+
+
+@app.put("/api/categories/rename", response_model=CategoryRenameResponse)
+def rename_category(body: CategoryRenameRequest):
+    """重命名分类，自动更新该分类下所有条目。"""
+    d = _get_dictionary()
+    if d is None:
+        raise HTTPException(503, "词典服务不可用")
+    if body.old_name == body.new_name:
+        raise HTTPException(400, "新旧分类名相同")
+    affected = d.rename_category(body.old_name, body.new_name)
+    total = affected["term"] + affected["law"] + affected["authority"]
+    if total == 0:
+        raise HTTPException(404, f"分类 '{body.old_name}' 不存在或无条目使用")
+    return CategoryRenameResponse(
+        old_name=body.old_name,
+        new_name=body.new_name,
+        affected=CategoryAffectedCount(**affected),
+    )
+
+
+@app.delete("/api/categories/{name}", response_model=CategoryDeleteResponse)
+def delete_category(name: str):
+    """删除分类（条目的 category 置空，不删除条目本身）。"""
+    d = _get_dictionary()
+    if d is None:
+        raise HTTPException(503, "词典服务不可用")
+    affected = d.delete_category(name)
+    total = affected["term"] + affected["law"] + affected["authority"]
+    if total == 0:
+        raise HTTPException(404, f"分类 '{name}' 不存在或无条目使用")
+    return CategoryDeleteResponse(
+        deleted=name,
+        affected=CategoryAffectedCount(**affected),
+    )
+
+
+@app.get("/api/dictionary/{item_type}", response_model=DictionaryItemList)
+def list_dictionary_items(item_type: str):
+    """列出某个类型的所有条目及其分类。item_type: term/law/authority。"""
+    if item_type not in ("term", "law", "authority"):
+        raise HTTPException(400, "item_type 必须是 term/law/authority")
+    d = _get_dictionary()
+    if d is None:
+        raise HTTPException(503, "词典服务不可用")
+    items = d.list_all_items(item_type)
+    return DictionaryItemList(
+        items=[DictionaryItem(name=it["name"], category=it.get("category", "")) for it in items]
+    )
+
+
+@app.put("/api/dictionary/{item_name}/category")
+def set_item_category(item_name: str, body: SetCategoryRequest):
+    """设置单个条目的分类。"""
+    d = _get_dictionary()
+    if d is None:
+        raise HTTPException(503, "词典服务不可用")
+    ok = d.set_item_category(body.item_type, item_name, body.category)
+    if not ok:
+        raise HTTPException(404, f"未找到条目: {item_name} (type={body.item_type})")
+    return {"item_name": item_name, "item_type": body.item_type, "category": body.category}
+
+
+# ── 6. 条文关联查询 ──
+
+@app.post("/api/articles/relations", response_model=ArticleRelationsResponse)
+def article_relations(body: ArticleRelationsRequest):
+    """根据法规名和条文号查询条文关联关系。
+
+    返回目标条文、引用它的条文、它引用的条文、所属文档、关联法规及示例条文。
+    """
+    kg = _get_graph()
+    if kg is None or not kg._connected:
+        raise HTTPException(503, "Neo4j 知识图谱服务不可用")
+
+    # 中文数字 → 阿拉伯数字
+    from rag_finance_system.src.graph_builder import _parse_cn_number
+    article_num = _parse_cn_number(body.article_num)
+
+    result = kg.get_article_relations(body.law_name, article_num)
+
+    if result is None or result.get("target") is None:
+        raise HTTPException(404, f"未找到 '{body.law_name}' 第{body.article_num}条")
+
+    return ArticleRelationsResponse(
+        target=ArticleInfo(**result["target"]) if result.get("target") else None,
+        incoming_refs=[ReferenceInfo(**r) for r in result.get("incoming_refs", [])],
+        outgoing_refs=[ReferenceInfo(**r) for r in result.get("outgoing_refs", [])],
+        parent_document=DocumentInfo(**result["parent_document"]) if result.get("parent_document") else None,
+        related_documents=[RelatedDocumentInfo(**r) for r in result.get("related_documents", [])],
+        related_articles=[ArticleInfo(**r) for r in result.get("related_articles", [])],
+    )
+
+
+@app.get("/api/laws")
+def list_laws():
+    """返回知识图谱中已索引的所有法规名称列表（供前端下拉选择）。"""
+    kg = _get_graph()
+    if kg is None or not kg._connected:
+        raise HTTPException(503, "Neo4j 知识图谱服务不可用")
+    law_names = kg.get_distinct_law_names()
+    return {"law_names": law_names, "count": len(law_names)}
