@@ -1,0 +1,135 @@
+{
+  "_description": "精简测试用金融词典",
+  "_version": "1.0.0",
+  "terms": {
+    "资本充足率": {
+      "aliases": ["资本充足率", "资本充足", "CAR", "Capital Adequacy Ratio"],
+      "category": "银行监管",
+      "definition": "商业银行持有的资本与风险加权资产之间的比率"
+    },
+    "不良贷款率": {
+      "aliases": ["不良贷款率", "不良率", "NPL", "Non-Performing Loan", "不良贷款"],
+      "category": "银行监管",
+      "definition": "不良贷款占总贷款余额的比例"
+    },
+    "拨备覆盖率": {
+      "aliases": ["拨备覆盖率", "拨备", "贷款损失准备", "Provision Coverage"],
+      "category": "银行监管",
+      "definition": "贷款损失准备与不良贷款余额的比率"
+    },
+    "反洗钱": {
+      "aliases": ["反洗钱", "AML", "Anti-Money Laundering", "可疑交易"],
+      "category": "合规",
+      "definition": "预防和打击掩饰犯罪所得的活动"
+    },
+    "内部控制": {
+      "aliases": ["内部控制", "内控", "Internal Control", "内控制度"],
+      "category": "公司治理",
+      "definition": "企业保障资产安全和信息真实完整的政策和程序"
+    },
+    "合规管理": {
+      "aliases": ["合规管理", "合规", "Compliance", "合规风险"],
+      "category": "公司治理",
+      "definition": "确保经营活动符合法律法规的管理体系"
+    },
+    "信息披露": {
+      "aliases": ["信息披露", "信息公开", "Disclosure"],
+      "category": "证券监管",
+      "definition": "上市公司按规定向公众公开经营管理信息"
+    },
+    "内幕交易": {
+      "aliases": ["内幕交易", "内幕信息", "Insider Trading"],
+      "category": "证券监管",
+      "definition": "利用未公开重大信息进行证券交易的行为"
+    },
+    "股东责任": {
+      "aliases": ["股东责任", "股东义务", "出资义务", "股东"],
+      "category": "公司法",
+      "definition": "股东对公司承担的义务和责任"
+    },
+    "注册资本": {
+      "aliases": ["注册资本", "注册资金", "Registered Capital"],
+      "category": "公司法",
+      "definition": "公司设立时登记的资本总额"
+    },
+    "绿色金融": {
+      "aliases": ["绿色金融", "绿色信贷", "Green Finance", "ESG"],
+      "category": "金融政策",
+      "definition": "支持环境改善和应对气候变化的金融活动"
+    },
+    "普惠金融": {
+      "aliases": ["普惠金融", "金融包容", "Financial Inclusion"],
+      "category": "金融政策",
+      "definition": "为所有阶层提供可负担的正规金融服务"
+    },
+    "偿付能力": {
+      "aliases": ["偿付能力", "Solvency", "偿二代", "C-ROSS"],
+      "category": "保险监管",
+      "definition": "保险公司履行赔偿或给付保险金责任的能力"
+    },
+    "存款保险": {
+      "aliases": ["存款保险", "存款保障", "Deposit Insurance"],
+      "category": "银行监管",
+      "definition": "为存款人提供保障的制度"
+    },
+    "杠杆率": {
+      "aliases": ["杠杆率", "杠杆比率", "Leverage Ratio"],
+      "category": "银行监管",
+      "definition": "一级资本与表内外资产余额的比率"
+    }
+  },
+  "law_names": {
+    "中华人民共和国公司法": {
+      "short": "公司法",
+      "category": "商事法律",
+      "aliases": ["公司法"]
+    },
+    "中华人民共和国证券法": {
+      "short": "证券法",
+      "category": "金融法律",
+      "aliases": ["证券法"]
+    },
+    "中华人民共和国商业银行法": {
+      "short": "商业银行法",
+      "category": "银行法律",
+      "aliases": ["商业银行法"]
+    },
+    "中华人民共和国反洗钱法": {
+      "short": "反洗钱法",
+      "category": "金融法律",
+      "aliases": ["反洗钱法"]
+    },
+    "中华人民共和国银行业监督管理法": {
+      "short": "银监法",
+      "category": "银行法律",
+      "aliases": ["银监法", "银监法"]
+    }
+  },
+  "authorities": {
+    "国家金融监督管理总局": {
+      "short": "金管总局",
+      "category": "监管机构",
+      "aliases": ["金管总局", "金融监管总局"],
+      "historical": ["银保监会", "中国银保监会", "中国银行业监督管理委员会"]
+    },
+    "中国人民银行": {
+      "short": "央行",
+      "category": "中央银行",
+      "aliases": ["央行", "人民银行"],
+      "historical": []
+    },
+    "中国证券监督管理委员会": {
+      "short": "证监会",
+      "category": "监管机构",
+      "aliases": ["证监会"],
+      "historical": []
+    }
+  },
+  "abbreviations": {
+    "NPL": "不良贷款率",
+    "CAR": "资本充足率",
+    "AML": "反洗钱",
+    "ESG": "绿色金融",
+    "LCR": "流动性覆盖率"
+  }
+}

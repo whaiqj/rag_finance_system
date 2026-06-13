@@ -33,3 +33,14 @@ line-ending = "auto"
 
 [tool.ruff.lint.isort]
 known-first-party = ["rag_finance_system"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short --strict-markers"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks integration tests requiring external services",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

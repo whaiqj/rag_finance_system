@@ -36,10 +36,30 @@ app.py (Streamlit HTTP 客户端)
         -> 溯源 + 可信度评分
 ```
 
+## API 端点
+
+所有接口详见 `rag_finance_system/RAG_Finance_API.postman_collection.json`（Postman 导入即用）。
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/documents/upload` | 上传 PDF/TXT/图片文件 |
+| `POST` | `/api/documents/index` | 解析 + 分段 + 写入 Milvus + BM25 |
+| `GET` | `/api/laws` | 列出已索引法规及版本状态 |
+| `POST` | `/api/search` | 混合检索（向量 + 全文 + 术语 + RRF + Reranker） |
+| `POST` | `/api/qa` | 完整 RAG 问答（含溯源 + 可信度评分） |
+| `POST` | `/api/qa/stream` | SSE 流式问答（token 级别实时推送） |
+| `POST` | `/api/articles/relations` | Neo4j 图谱条文关联查询 |
+| `GET` | `/api/categories` | 列出词典分类 |
+| `PUT` | `/api/categories/rename` | 重命名词典分类 |
+| `DELETE` | `/api/categories/{name}` | 删除词典分类 |
+| `GET` | `/api/dictionary/{item_type}` | 列出词典条目（law/authority/term/abbreviation） |
+| `PUT` | `/api/dictionary/{item_name}/category` | 设置词典条目分类 |
+
 ## 主要能力
 
-- 金融法规 PDF/TXT 解析与分段
+- 金融法规 PDF/TXT/图片 解析与分段
 - PDF 文本层不足时自动 OCR 回退（PaddleOCR + Docling 双后端）
+- 独立图片文件 OCR 解析（支持 PNG/JPG/BMP/TIFF/WEBP），低分辨率图片基础预处理增强（灰度化+对比度+锐化）
 - 法规、案例、其他资料三类文档问答
 - 金融词典实体检测、别名归一、缩写展开
 - Milvus 向量检索
@@ -47,6 +67,8 @@ app.py (Streamlit HTTP 客户端)
 - 术语精确倒排召回
 - RRF 融合 + Reranker 精排
 - Neo4j 图谱补充召回（可选）
+- SSE 流式问答输出（token 级别实时推送）
+- 查询重写器 LoRA 微调训练管线
 - 法规 `effective_date` / `status` 时效性过滤
 - Streamlit 前端与 FastAPI 后端分离
 
@@ -62,8 +84,9 @@ app.py (Streamlit HTTP 客户端)
 | 向量数据库 | Milvus |
 | 全文检索 | Elasticsearch 8.x / 内存 BM25 回退 |
 | 知识图谱 | Neo4j 5.x（可选） |
-| OCR | PaddleOCR + Docling 双后端（PDF 文本层不足时自动回退） |
+| OCR | PaddleOCR + Docling 双后端（PDF 文本层不足时自动回退）；独立图片文件 OCR；低分辨率图片基础预处理增强 |
 | LLM | 本地 Qwen / DeepSeek API / 通义千问 API |
+| 流式输出 | FastAPI SSE (Server-Sent Events)，token 级别实时推送 |
 
 ## 目录结构
 
@@ -71,13 +94,23 @@ app.py (Streamlit HTTP 客户端)
 .
 ├── README.md
 ├── requirements.txt
+├── requirements-dev.txt              # pytest / coverage 等开发依赖
+├── pyproject.toml                    # ruff + pytest 配置
 ├── docker-compose.yml              # Milvus 本地部署
 ├── download_model.py               # 本地 Reranker 模型校验脚本
+├── build_index_bulk.py             # 批量索引构建（83 部法律一键入库）
+├── test_performance.py             # 性能基准测试（毫秒级分步计时）
+├── conftest.py                     # 根级测试配置（OCR 禁用）
 ├── data/
 │   ├── finance_dictionary.json
 │   ├── dictionary_candidates.json
 │   └── raw/                        # 上传文件存储（运行时生成）
 ├── models/                         # 本地模型目录（需自行准备，gitignored）
+├── tests/                          # 单元测试（15 个测试文件 + fixtures）
+│   ├── conftest.py                 # 共享 mock fixtures
+│   ├── fixtures/                   # 样本 chunks + 测试词典
+│   ├── unit/                       # 各模块单元测试
+│   └── api/                        # API 层测试（待补全）
 └── rag_finance_system/
     ├── .env
     ├── .env.example
@@ -85,6 +118,8 @@ app.py (Streamlit HTTP 客户端)
     ├── api_app.py
     ├── api_schemas.py
     ├── test_pipeline.py
+    ├── test_retrieval_baseline.py
+    ├── RAG_Finance_API.postman_collection.json
     ├── src/
     │   ├── document_processor.py
     │   ├── embedder.py
@@ -170,6 +205,16 @@ NEO4J_DATABASE=neo4j
 
 # 可选：LibreOffice 路径
 # SOFFICE_PATH=C:/Program Files/LibreOffice/program/soffice.exe
+
+# OCR（PDF 文本层不足时自动回退）
+# OCR_BACKEND=auto              # auto | docling | paddleocr | none
+# OCR_LANG=ch
+# OCR_MIN_TEXT_CHARS=80
+# OCR_EMPTY_PAGE_RATIO=0.5
+# OCR_RENDER_SCALE=2.0
+
+# 图片预处理（低质量手机照片可增强OCR效果）
+# IMAGE_PREPROCESS=auto         # auto | always | never
 ```
 
 ## 启动方式
@@ -206,7 +251,7 @@ py -3 -m streamlit run rag_finance_system/app.py
 
 1. 启动 FastAPI 与 Streamlit
 2. 在侧边栏确认 API URL 可连通
-3. 上传 PDF/TXT 文件并建立索引
+3. 上传 PDF/TXT/图片 文件并建立索引
 4. 选择检索范围：全部 / 仅法条 / 仅案例 / 仅其他
 5. 输入问题，查看答案、溯源与可信度
 
@@ -221,6 +266,24 @@ py -3 rag_finance_system/tools/import_testfiles.py
 ```
 
 该脚本当前会按 `law` 类型导入 `src/txt_files` 目录中的法规语料。
+
+### 批量索引构建（全量重建）
+
+```bash
+py -3 build_index_bulk.py
+```
+
+一键完成 83 部金融法律的解析、分段、向量化和索引写入（Milvus + BM25），适合首次部署或全量重建场景。
+
+### 图片 OCR 解析
+
+项目支持独立图片文件的 OCR 文字提取，可用于扫描件、手机拍屏等场景：
+
+- 支持格式：PNG / JPG / BMP / TIFF / WEBP
+- 双后端自动回退：`PaddleOCR`（中文优先）→ `Docling`
+- 低分辨率图片基础预处理（仅 PaddleOCR 后端）：灰度化 + 对比度增强 (1.5×) + 锐化 (1.2×)
+- 通过 `IMAGE_PREPROCESS` 环境变量控制：`auto`（仅低分辨率触发）/ `always` / `never`
+- 也可通过 `OCR_BACKEND=none` 完全禁用 OCR
 
 ### 词典自动抽取
 
@@ -239,6 +302,28 @@ py -3 rag_finance_system/tools/convert_testfiles.py
 ```
 
 该脚本用于把 `data/testfiles` 下的 `.doc/.docx` 转成 `.txt`。优先读取 `SOFFICE_PATH`，否则尝试从 `PATH` 或常见安装目录查找 `soffice`。
+
+### 查询重写器训练
+
+基于 `Qwen2.5-0.5B-Instruct` 的 LoRA 微调管线，将自然语言问题改写为检索友好的查询：
+
+```bash
+py -3 rag_finance_system/tools/generate_rewrite_data.py   # 正向 + 反向改写数据生成
+py -3 rag_finance_system/tools/rewrite_questions_for_rag.py # DeepSeek API 标注
+py -3 rag_finance_system/tools/train_rewriter.py           # LoRA 微调训练
+```
+
+训练产物（`checkpoints/rewriter_lora/`）为可选组件，缺失时自动回退主 LLM 改写。注意：预训练 checkpoint 不在本仓库中（gitignored），需自行运行训练脚本生成。
+
+### 运行测试
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v                                          # 单元测试（15 个模块）
+pytest rag_finance_system/test_pipeline.py                # 端到端管线验证
+pytest rag_finance_system/test_retrieval_baseline.py      # 检索基线评估
+py -3 test_performance.py                                 # 性能基准（毫秒级分步计时）
+```
 
 ## 检索与时效性说明
 

@@ -1,7 +1,8 @@
 """
 llm.py
 LLM推理模块
-支持：本地Qwen2.5-7B-Int4（优先）、通义千问API（备选）
+- 纯文本：本地Qwen2.5-7B-Int4（优先）→ DeepSeek API → 通义千问 API
+- 多模态：本地Qwen2.5-VL（可选）→ Qwen-VL API (DashScope) → GPT-4V (OpenAI)
 """
 
 import os
@@ -17,6 +18,8 @@ DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_API_BASE_URL = os.getenv("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com")
+QWEN_VL_MODEL = os.getenv("QWEN_VL_MODEL", "qwen-vl-plus")
+QWEN_VL_API_BASE_URL = os.getenv("QWEN_VL_API_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
 
 # ========================
@@ -248,6 +251,107 @@ class DeepseekAPILLM:
 
 
 # ========================
+# 多模态 API（Qwen-VL，图片+文本理解）
+# ========================
+
+class QwenVLAPILLM:
+    """
+    通义千问多模态 API（Qwen-VL），支持图片+文本联合输入。
+
+    用途：
+    - 用户上传扫描件/手机拍屏照片直接提问
+    - 含图表/印章的文档页面理解
+    - 需要视觉能力的金融文档分析
+
+    content 格式：纯文本 → str；含图片 → list[dict]
+    [{"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+     {"type": "text", "text": "这张合同里有什么问题？"}]
+    """
+
+    def __init__(self, api_key: str = DASHSCOPE_API_KEY, model: str = QWEN_VL_MODEL,
+                 base_url: str = QWEN_VL_API_BASE_URL):
+        if not api_key:
+            raise ValueError("请在.env中设置DASHSCOPE_API_KEY以使用Qwen-VL多模态API")
+        self.api_key = api_key
+        self.model = model
+        self.base_url = base_url
+        logger.info(f"使用Qwen-VL多模态API: {model}")
+
+    def generate(
+        self,
+        messages: list[dict],
+        max_new_tokens: int = 1024,
+        temperature: float = 0.1,
+    ) -> str:
+        """
+        生成回答。messages 中的 content 可以是：
+        - str: 纯文本
+        - list[dict]: 多模态内容 [{"type": "text", ...}, {"type": "image_url", ...}]
+        """
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+        )
+        return response.choices[0].message.content
+
+    def generate_stream(
+        self,
+        messages: list[dict],
+        max_new_tokens: int = 1024,
+        temperature: float = 0.1,
+    ) -> Iterator[str]:
+        """多模态流式生成。"""
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_new_tokens,
+            temperature=temperature,
+            stream=True,
+        )
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield delta.content
+
+    @staticmethod
+    def encode_image_to_data_uri(image_path: str) -> str:
+        """将本地图片编码为 base64 data URI，用于传入多模态 API。"""
+        import base64
+        import mimetypes
+
+        mime, _ = mimetypes.guess_type(image_path)
+        if not mime or not mime.startswith("image/"):
+            mime = "image/png"
+
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:{mime};base64,{b64}"
+
+    @staticmethod
+    def build_image_message(text: str, image_paths: list[str]) -> list[dict]:
+        """构建包含图片的多模态消息。
+        Returns: [{"role": "user", "content": [{"type": "image_url", ...}, {"type": "text", ...}]}]
+        """
+        content_parts = []
+        for path in image_paths:
+            data_uri = QwenVLAPILLM.encode_image_to_data_uri(path)
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": data_uri},
+            })
+        content_parts.append({"type": "text", "text": text})
+        return [{"role": "user", "content": content_parts}]
+
+
+# ========================
 # 工厂函数：自动选择LLM
 # ========================
 
@@ -269,4 +373,44 @@ def get_llm(prefer_local: bool = True):
     raise RuntimeError(
         "无法初始化LLM：本地模型加载失败且未配置 Deepseek 或 通义千问 API Key。\n"
         "请在.env中设置 DEEPSEEK_API_KEY 或 DASHSCOPE_API_KEY，或确保本地模型路径正确。"
+    )
+
+
+def get_multimodal_llm():
+    """
+    获取多模态 LLM（适用于图片+文本联合输入场景）。
+    优先级：本地 Qwen-VL 系列 → Qwen-VL API (DashScope)
+    """
+    # 本地多模态模型路径（可选，需手动下载 Qwen2.5-VL 系列）
+    local_vl_path = os.getenv("QWEN_VL_LOCAL_PATH", "")
+    if local_vl_path:
+        try:
+            logger.info(f"尝试加载本地多模态模型: {local_vl_path}")
+            # 注意：Qwen2.5-VL 需要 transformers >= 4.49 + qwen-vl-utils
+            # 如果环境不支持，会回退 API
+            from transformers import AutoModelForVision2Seq, AutoProcessor
+
+            processor = AutoProcessor.from_pretrained(local_vl_path, trust_remote_code=True)
+            model = AutoModelForVision2Seq.from_pretrained(
+                local_vl_path, device_map="auto", trust_remote_code=True
+            )
+            model.eval()
+            logger.info("本地多模态模型加载完成")
+            # 这里可以包装成类似接口的类，暂时先保持简洁：本地不可用时直接 API
+            # TODO: 封装 LocalVLModel 类
+        except Exception as e:
+            logger.warning(f"本地多模态模型加载失败: {e}，回退 API")
+
+    if DASHSCOPE_API_KEY:
+        return QwenVLAPILLM()
+    if os.getenv("OPENAI_API_KEY"):
+        return QwenVLAPILLM(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model=os.getenv("OPENAI_VISION_MODEL", "gpt-4o"),
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        )
+
+    raise RuntimeError(
+        "无法初始化多模态LLM：本地模型不可用且未配置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY。\n"
+        "请下载 Qwen2.5-VL 或设置 Qwen-VL API Key。"
     )
